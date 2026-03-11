@@ -181,7 +181,7 @@ export class MyMCP extends McpAgent {
 
     this.server.tool(
       "get_price_distribution",
-      "Get price distribution histogram. Returns 30 buckets with counts, plus median and mean.",
+      "Get price distribution histogram. Returns 30 buckets with counts, plus median and mean. When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
       {
         city: z.enum(CITY_ENUM).optional().default("riyadh"),
         listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
@@ -196,7 +196,7 @@ export class MyMCP extends McpAgent {
 
     this.server.tool(
       "get_area_distribution",
-      "Get area (sqm) distribution histogram. Returns 30 buckets with counts, plus median and mean.",
+      "Get area (sqm) distribution histogram. Returns 30 buckets with counts, plus median and mean. When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
       {
         city: z.enum(CITY_ENUM).optional().default("riyadh"),
         listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
