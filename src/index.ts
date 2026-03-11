@@ -89,7 +89,7 @@ export class MyMCP extends McpAgent {
 
     this.server.tool(
       "search_listings",
-      "Search Saudi rental or sale property listings with filters. Returns paginated results. Prices are in SAR.",
+      "Search Saudi rental or sale property listings with filters. Returns paginated results. Prices are in SAR. IMPORTANT: When filtering by neighborhood, you MUST first call list_neighborhoods to get the exact English name. Do not guess neighborhood names.",
       {
         city: z.enum(CITY_ENUM).optional().default("riyadh").describe("City to search"),
         listing_type: z.enum(["rent", "sale"]).optional().default("rent").describe("Rent or sale"),
@@ -162,7 +162,7 @@ export class MyMCP extends McpAgent {
 
     this.server.tool(
       "get_best_value_listings",
-      "Find listings priced below their neighborhood median — best deals. Returns listings sorted by discount percentage (biggest savings first).",
+      "Find listings priced below their neighborhood median — best deals. Returns listings sorted by discount percentage (biggest savings first). When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
       {
         city: z.enum(CITY_ENUM).optional().default("riyadh"),
         listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
@@ -218,7 +218,7 @@ export class MyMCP extends McpAgent {
 
     this.server.tool(
       "compare_neighborhoods",
-      "Compare 2-5 neighborhoods side by side. Returns median price, area, price/sqm, price range (P25-P75), amenity percentages, property mix, and bedroom breakdown for each.",
+      "Compare 2-5 neighborhoods side by side. Returns median price, area, price/sqm, price range (P25-P75), amenity percentages, property mix, and bedroom breakdown for each. IMPORTANT: Call list_neighborhoods first to get exact English names.",
       {
         city: z.enum(CITY_ENUM).optional().default("riyadh"),
         neighborhoods: z.string().describe("2-5 neighborhood English names, comma-separated. Use list_neighborhoods to get valid names."),
