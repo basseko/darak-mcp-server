@@ -105,7 +105,7 @@ export class MyMCP extends McpAgent {
         bathrooms: z.number().optional().describe("Minimum bathrooms"),
         floor: z.enum(["ground", "upper"]).optional().describe("Floor preference"),
         source: z.string().optional().describe("Data source name(s), comma-separated"),
-        max_age: z.number().optional().describe("Max property age in days"),
+        max_age: z.number().optional().describe("Max building age in years"),
         updated_within: z.enum(["3d", "1w", "1m"]).optional().describe("Only listings updated within this period"),
         verified: z.boolean().optional().describe("Filter by verified listings only"),
         advertiser_type: z.enum(["owner", "agent", "developer"]).optional().describe("Filter by advertiser type"),
