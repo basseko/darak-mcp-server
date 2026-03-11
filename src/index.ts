@@ -42,15 +42,37 @@ async function callApi(url: string): Promise<unknown> {
   }
 }
 
+/** Replace source_url with darak.app listing URL on any object with an `id` field */
+function rewriteUrls(data: unknown): unknown {
+  if (!data || typeof data !== "object") return data;
+  if (Array.isArray(data)) return data.map(rewriteUrls);
+
+  const obj = data as Record<string, unknown>;
+
+  // Single listing object — has id + source_url
+  if (typeof obj.id === "number" && "source_url" in obj) {
+    const { source_url: _, ...rest } = obj;
+    return { ...rest, url: `https://darak.app/listing/${obj.id}` };
+  }
+
+  // Paginated response — rewrite nested arrays (listings, comparables, etc.)
+  const rewritten: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    rewritten[key] = Array.isArray(value) ? value.map(rewriteUrls) : value;
+  }
+  return rewritten;
+}
+
 function textResult(data: unknown) {
-  if (data && typeof data === "object" && "error" in data) {
+  const rewritten = rewriteUrls(data);
+  if (rewritten && typeof rewritten === "object" && "error" in rewritten) {
     return {
-      content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
+      content: [{ type: "text" as const, text: JSON.stringify(rewritten, null, 2) }],
       isError: true,
     };
   }
   return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
+    content: [{ type: "text" as const, text: JSON.stringify(rewritten, null, 2) }],
   };
 }
 
