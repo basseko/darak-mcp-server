@@ -63,9 +63,32 @@ function rewriteUrls(data: unknown): unknown {
   return rewritten;
 }
 
-function textResult(data: unknown) {
+function trackToolCall(toolName: string, params: Record<string, unknown>, isError: boolean) {
+  // Fire-and-forget PostHog event via HTTP API
+  const token = (typeof process !== "undefined" && process.env?.POSTHOG_PROJECT_TOKEN) || "";
+  if (!token) return;
+  fetch("https://us.i.posthog.com/capture/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: token,
+      event: "mcp_tool_called",
+      distinct_id: "mcp-server",
+      properties: {
+        tool: toolName,
+        city: params.city ?? null,
+        listing_type: params.listing_type ?? null,
+        is_error: isError,
+      },
+    }),
+  }).catch(() => {});
+}
+
+function textResult(toolName: string, data: unknown, params: Record<string, unknown> = {}) {
   const rewritten = rewriteUrls(data);
-  if (rewritten && typeof rewritten === "object" && "error" in rewritten) {
+  const isError = !!(rewritten && typeof rewritten === "object" && "error" in rewritten);
+  trackToolCall(toolName, params, isError);
+  if (isError) {
     return {
       content: [{ type: "text" as const, text: JSON.stringify(rewritten, null, 2) }],
       isError: true,
@@ -120,7 +143,7 @@ export class MyMCP extends McpAgent {
         page: z.number().optional().default(1).describe("Page number"),
         page_size: z.number().optional().default(30).describe("Results per page (max 100)"),
       },
-      async (params) => textResult(await callApi(buildUrl("/api/listings", {
+      async (params) => textResult("search_listings", await callApi(buildUrl("/api/listings", {
         city: params.city, listing_type: params.listing_type, property_type: params.property_type,
         price_min: params.price_min, price_max: params.price_max, beds: params.beds,
         neighborhood: params.neighborhood, amenities: params.amenities, furnished: params.furnished,
@@ -130,14 +153,14 @@ export class MyMCP extends McpAgent {
         advertiser_type: params.advertiser_type, compound: params.compound,
         duplex: params.duplex, livings: params.livings,
         sort: params.sort, page: params.page, page_size: params.page_size,
-      }))),
+      })), params),
     );
 
     this.server.tool(
       "get_listing",
       "Get full details for a specific property listing by its ID.",
       { id: z.number().describe("Listing ID") },
-      async ({ id }) => textResult(await callApi(buildUrl(`/api/listings/${id}`))),
+      async ({ id }) => textResult("get_listing", await callApi(buildUrl(`/api/listings/${id}`))),
     );
 
     this.server.tool(
@@ -147,7 +170,7 @@ export class MyMCP extends McpAgent {
         id: z.number().describe("Listing ID to find comparables for"),
         limit: z.number().optional().default(50).describe("Max results (max 100)"),
       },
-      async (params) => textResult(await callApi(buildUrl("/api/listing-comparables", { id: params.id, limit: params.limit }))),
+      async (params) => textResult("get_comparable_listings", await callApi(buildUrl("/api/listing-comparables", { id: params.id, limit: params.limit }))),
     );
 
     this.server.tool(
@@ -157,7 +180,7 @@ export class MyMCP extends McpAgent {
         id: z.number().describe("Listing ID"),
         limit: z.number().optional().default(50).describe("Max history records (max 200)"),
       },
-      async (params) => textResult(await callApi(buildUrl("/api/price-history", { id: params.id, limit: params.limit }))),
+      async (params) => textResult("get_price_history", await callApi(buildUrl("/api/price-history", { id: params.id, limit: params.limit }))),
     );
 
     this.server.tool(
@@ -171,10 +194,10 @@ export class MyMCP extends McpAgent {
         beds: z.number().optional().describe("Minimum bedrooms"),
         limit: z.number().optional().default(30).describe("Max results (max 100)"),
       },
-      async (params) => textResult(await callApi(buildUrl("/api/best-value", {
+      async (params) => textResult("get_best_value_listings", await callApi(buildUrl("/api/best-value", {
         city: params.city, listing_type: params.listing_type, property_type: params.property_type,
         neighborhood: params.neighborhood, beds: params.beds, limit: params.limit,
-      }))),
+      })), params),
     );
 
     // --- Market Analytics ---
@@ -188,10 +211,10 @@ export class MyMCP extends McpAgent {
         property_type: z.enum(["apartment", "villa", "all"]).optional(),
         neighborhood: z.string().optional().describe("Neighborhood name(s), comma-separated"),
       },
-      async (params) => textResult(await callApi(buildUrl("/api/histogram", {
+      async (params) => textResult("get_price_distribution", await callApi(buildUrl("/api/histogram", {
         city: params.city, listing_type: params.listing_type,
         property_type: params.property_type, neighborhood: params.neighborhood,
-      }))),
+      })), params),
     );
 
     this.server.tool(
@@ -203,17 +226,17 @@ export class MyMCP extends McpAgent {
         property_type: z.enum(["apartment", "villa", "all"]).optional(),
         neighborhood: z.string().optional().describe("Neighborhood name(s), comma-separated"),
       },
-      async (params) => textResult(await callApi(buildUrl("/api/area-histogram", {
+      async (params) => textResult("get_area_distribution", await callApi(buildUrl("/api/area-histogram", {
         city: params.city, listing_type: params.listing_type,
         property_type: params.property_type, neighborhood: params.neighborhood,
-      }))),
+      })), params),
     );
 
     this.server.tool(
       "get_listing_market_stats",
       "Get market context for a specific listing: price/area percentiles, neighborhood comparison, and bedroom price chart.",
       { id: z.number().describe("Listing ID") },
-      async ({ id }) => textResult(await callApi(buildUrl("/api/listing-stats", { id }))),
+      async ({ id }) => textResult("get_listing_market_stats", await callApi(buildUrl("/api/listing-stats", { id }))),
     );
 
     this.server.tool(
@@ -225,10 +248,10 @@ export class MyMCP extends McpAgent {
         listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
         property_type: z.enum(["apartment", "villa", "all"]).optional(),
       },
-      async (params) => textResult(await callApi(buildUrl("/api/neighborhood-compare", {
+      async (params) => textResult("compare_neighborhoods", await callApi(buildUrl("/api/neighborhood-compare", {
         city: params.city, neighborhoods: params.neighborhoods,
         listing_type: params.listing_type, property_type: params.property_type,
-      }))),
+      })), params),
     );
 
     this.server.tool(
@@ -238,9 +261,26 @@ export class MyMCP extends McpAgent {
         city: z.enum(CITY_ENUM).optional().default("riyadh"),
         listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
       },
-      async (params) => textResult(await callApi(buildUrl("/api/market-summary", {
+      async (params) => textResult("get_market_summary", await callApi(buildUrl("/api/market-summary", {
         city: params.city, listing_type: params.listing_type,
-      }))),
+      })), params),
+    );
+
+    this.server.tool(
+      "get_neighborhood_trends",
+      "Get monthly price trends for 1-5 neighborhoods over time. Returns median price, P25/P75 range, and listing count per month. Shows price_change_pct between earliest and latest month. Use to answer questions about whether prices are rising or falling in a neighborhood. IMPORTANT: Call list_neighborhoods first to get exact English names.",
+      {
+        city: z.enum(CITY_ENUM).optional().default("riyadh"),
+        neighborhoods: z.string().describe("1-5 neighborhood English names, comma-separated. Use list_neighborhoods to get valid names."),
+        listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
+        property_type: z.enum(["apartment", "villa", "all"]).optional(),
+        months: z.number().optional().default(6).describe("How many months of history (max 24)"),
+      },
+      async (params) => textResult("get_neighborhood_trends", await callApi(buildUrl("/api/neighborhood-trends", {
+        city: params.city, neighborhoods: params.neighborhoods,
+        listing_type: params.listing_type, property_type: params.property_type,
+        months: params.months,
+      })), params),
     );
 
     // --- Geography & Navigation ---
@@ -249,14 +289,14 @@ export class MyMCP extends McpAgent {
       "list_neighborhoods",
       "List all neighborhoods in a city with Arabic and English names.",
       { city: z.enum(CITY_ENUM).optional().default("riyadh") },
-      async ({ city }) => textResult(await callApi(buildUrl("/api/neighborhoods", { city }))),
+      async ({ city }) => textResult("list_neighborhoods", await callApi(buildUrl("/api/neighborhoods", { city })), { city }),
     );
 
     this.server.tool(
       "list_city_directions",
       "Get districts/directions of a city with their neighborhoods. Note: data from external API, may be slower.",
       { city: z.enum(CITY_ENUM).optional().default("riyadh") },
-      async ({ city }) => textResult(await callApi(buildUrl("/api/directions", { city }))),
+      async ({ city }) => textResult("list_city_directions", await callApi(buildUrl("/api/directions", { city })), { city }),
     );
 
     this.server.tool(
@@ -266,9 +306,9 @@ export class MyMCP extends McpAgent {
         city: z.enum(CITY_ENUM).describe("City slug"),
         neighborhood: z.string().describe("Neighborhood English name (use list_neighborhoods to get valid names)"),
       },
-      async ({ city, neighborhood }) => textResult(await callApi(buildUrl("/api/neighborhood-pois", {
+      async ({ city, neighborhood }) => textResult("get_neighborhood_pois", await callApi(buildUrl("/api/neighborhood-pois", {
         city: CITY_SLUG_TO_NAME[city] ?? city, neighborhood,
-      }))),
+      })), { city }),
     );
 
     this.server.tool(
@@ -282,10 +322,10 @@ export class MyMCP extends McpAgent {
         city: z.enum(CITY_ENUM).optional().default("riyadh"),
         sort: z.enum(["relevance", "price_asc", "price_desc", "area_desc", "newest"]).optional(),
       },
-      async (params) => textResult(await callApi(buildUrl("/api/map-listings", {
+      async (params) => textResult("get_map_listings", await callApi(buildUrl("/api/map-listings", {
         bounds: params.bounds, zoom: params.zoom, listing_type: params.listing_type,
         property_type: params.property_type, city: params.city, sort: params.sort,
-      }))),
+      })), params),
     );
 
     this.server.tool(
@@ -295,7 +335,7 @@ export class MyMCP extends McpAgent {
         bounds: z.string().describe("Bounding box as 'south,west,north,east' coordinates"),
         zoom: z.number().optional().default(12).describe("Map zoom level (min 10 for results)"),
       },
-      async ({ bounds, zoom }) => textResult(await callApi(buildUrl("/api/map-pois", { bounds, zoom }))),
+      async ({ bounds, zoom }) => textResult("get_map_pois", await callApi(buildUrl("/api/map-pois", { bounds, zoom }))),
     );
   }
 }
