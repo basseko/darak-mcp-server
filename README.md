@@ -1,51 +1,97 @@
-# Building a Remote MCP Server on Cloudflare (Without Auth)
+# Darak MCP Server
 
-This example allows you to deploy a remote MCP server that doesn't require authentication on Cloudflare Workers.
+Remote MCP server for Saudi real estate data. Gives AI assistants access to 65,000+ rental and sale property listings across 5 Saudi cities, with market analytics, neighborhood comparisons, and price trends.
 
-## Get started:
+**Server URL:** `https://mcp.darak.app/mcp`
 
-[![Deploy to Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/cloudflare/ai/tree/main/demos/remote-mcp-authless)
+## Tools (16, all read-only)
 
-This will deploy your MCP server to a URL like: `remote-mcp-server-authless.<your-account>.workers.dev/sse`
+### Search & Listings
+| Tool | Description |
+|------|-------------|
+| `search_listings` | Search with 20+ filters (city, price, beds, neighborhood, amenities, etc.) |
+| `get_listing` | Full details for a specific listing |
+| `get_comparable_listings` | Similar nearby listings for price comparison |
+| `get_price_history` | Price changes over time for a listing |
+| `get_best_value_listings` | Listings priced below neighborhood median |
 
-Alternatively, you can use the command line below to get the remote MCP Server created on your local machine:
+### Market Analytics
+| Tool | Description |
+|------|-------------|
+| `get_price_distribution` | Price histogram with median and mean |
+| `get_area_distribution` | Area (sqm) histogram with median and mean |
+| `get_listing_market_stats` | Price/area percentiles and neighborhood context for a listing |
+| `compare_neighborhoods` | Side-by-side comparison of 2-5 neighborhoods |
+| `get_market_summary` | City-level overview: totals, medians, top neighborhoods |
+| `get_neighborhood_trends` | Monthly price trends with P25/P75 range |
 
-```bash
-npm create cloudflare@latest -- my-mcp-server --template=cloudflare/ai/demos/remote-mcp-authless
-```
+### Geography
+| Tool | Description |
+|------|-------------|
+| `list_neighborhoods` | All neighborhoods in a city (Arabic + English names) |
+| `list_city_directions` | City districts with their neighborhoods |
+| `get_neighborhood_pois` | Points of interest near a neighborhood |
+| `get_map_listings` | Listings within geographic bounds |
+| `get_map_pois` | Points of interest within geographic bounds |
 
-## Customizing your MCP Server
+## Cities
 
-To add your own [tools](https://developers.cloudflare.com/agents/model-context-protocol/tools/) to the MCP server, define each tool inside the `init()` method of `src/index.ts` using `this.server.tool(...)`.
+Riyadh, Jeddah, Eastern Province, Makkah, Madinah.
 
-## Connect to Cloudflare AI Playground
+## Connect
 
-You can connect to your MCP server from the Cloudflare AI Playground, which is a remote MCP client:
-
-1. Go to https://playground.ai.cloudflare.com/
-2. Enter your deployed MCP server URL (`remote-mcp-server-authless.<your-account>.workers.dev/sse`)
-3. You can now use your MCP tools directly from the playground!
-
-## Connect Claude Desktop to your MCP server
-
-You can also connect to your remote MCP server from local MCP clients, by using the [mcp-remote proxy](https://www.npmjs.com/package/mcp-remote).
-
-To connect to your MCP server from Claude Desktop, follow [Anthropic's Quickstart](https://modelcontextprotocol.io/quickstart/user) and within Claude Desktop go to Settings > Developer > Edit Config.
-
-Update with this configuration:
+### Claude Desktop / Claude Code
 
 ```json
 {
-	"mcpServers": {
-		"calculator": {
-			"command": "npx",
-			"args": [
-				"mcp-remote",
-				"http://localhost:8787/sse" // or remote-mcp-server-authless.your-account.workers.dev/sse
-			]
-		}
-	}
+  "mcpServers": {
+    "darak": {
+      "command": "npx",
+      "args": ["mcp-remote", "https://mcp.darak.app/mcp"]
+    }
+  }
 }
 ```
 
-Restart Claude and you should see the tools become available.
+### Claude Code (CLI)
+
+```bash
+claude mcp add --transport http darak https://mcp.darak.app/mcp
+```
+
+### Any MCP client (Streamable HTTP)
+
+Connect directly to `https://mcp.darak.app/mcp` using the Streamable HTTP transport.
+
+## Development
+
+```bash
+npm install
+npm run dev       # Local dev server at http://localhost:8787
+npm run deploy    # Deploy to Cloudflare Workers
+```
+
+## Architecture
+
+- Runs on Cloudflare Workers with Durable Objects
+- Calls the public Darak API at `https://darak.app/api/*`
+- All tools are read-only (annotated with `readOnlyHint: true`)
+- No authentication required (public data)
+
+## Privacy Policy
+
+See [https://darak.app/privacy](https://darak.app/privacy) for the full privacy policy.
+
+**Data handling summary:**
+
+- **No user data collected.** The server does not require authentication and does not store any user information.
+- **No conversation data stored.** Queries are proxied to the Darak API and responses are returned directly. The server does not log, store, or inspect query contents.
+- **Anonymous usage analytics.** Tool call events (tool name, city, listing type, success/failure) are sent to PostHog for aggregate usage monitoring. No personally identifiable information is included.
+- **No third-party data sharing.** Data is not sold, shared, or transferred to third parties beyond the PostHog analytics described above.
+- **Data source.** All property data is aggregated from publicly available Saudi real estate platforms.
+
+## Support
+
+- Website: [darak.app](https://darak.app)
+- Issues: [github.com/your-repo/issues](https://github.com/your-repo/issues)
+- Twitter/X: [@getdarak](https://x.com/getdarak)

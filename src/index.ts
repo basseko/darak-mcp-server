@@ -99,6 +99,8 @@ function textResult(toolName: string, data: unknown, params: Record<string, unkn
   };
 }
 
+const READ_ONLY = { readOnlyHint: true, destructiveHint: false } as const;
+
 // --- MCP Agent ---
 
 export class MyMCP extends McpAgent {
@@ -143,6 +145,7 @@ export class MyMCP extends McpAgent {
         page: z.number().optional().default(1).describe("Page number"),
         page_size: z.number().optional().default(30).describe("Results per page (max 100)"),
       },
+      READ_ONLY,
       async (params) => textResult("search_listings", await callApi(buildUrl("/api/listings", {
         city: params.city, listing_type: params.listing_type, property_type: params.property_type,
         price_min: params.price_min, price_max: params.price_max, beds: params.beds,
@@ -160,6 +163,7 @@ export class MyMCP extends McpAgent {
       "get_listing",
       "Get full details for a specific property listing by its ID.",
       { id: z.number().describe("Listing ID") },
+      READ_ONLY,
       async ({ id }) => textResult("get_listing", await callApi(buildUrl(`/api/listings/${id}`))),
     );
 
@@ -170,6 +174,7 @@ export class MyMCP extends McpAgent {
         id: z.number().describe("Listing ID to find comparables for"),
         limit: z.number().optional().default(50).describe("Max results (max 100)"),
       },
+      READ_ONLY,
       async (params) => textResult("get_comparable_listings", await callApi(buildUrl("/api/listing-comparables", { id: params.id, limit: params.limit }))),
     );
 
@@ -180,6 +185,7 @@ export class MyMCP extends McpAgent {
         id: z.number().describe("Listing ID"),
         limit: z.number().optional().default(50).describe("Max history records (max 200)"),
       },
+      READ_ONLY,
       async (params) => textResult("get_price_history", await callApi(buildUrl("/api/price-history", { id: params.id, limit: params.limit }))),
     );
 
@@ -194,6 +200,7 @@ export class MyMCP extends McpAgent {
         beds: z.number().optional().describe("Minimum bedrooms"),
         limit: z.number().optional().default(30).describe("Max results (max 100)"),
       },
+      READ_ONLY,
       async (params) => textResult("get_best_value_listings", await callApi(buildUrl("/api/best-value", {
         city: params.city, listing_type: params.listing_type, property_type: params.property_type,
         neighborhood: params.neighborhood, beds: params.beds, limit: params.limit,
@@ -211,6 +218,7 @@ export class MyMCP extends McpAgent {
         property_type: z.enum(["apartment", "villa", "all"]).optional(),
         neighborhood: z.string().optional().describe("Neighborhood name(s), comma-separated"),
       },
+      READ_ONLY,
       async (params) => textResult("get_price_distribution", await callApi(buildUrl("/api/histogram", {
         city: params.city, listing_type: params.listing_type,
         property_type: params.property_type, neighborhood: params.neighborhood,
@@ -226,6 +234,7 @@ export class MyMCP extends McpAgent {
         property_type: z.enum(["apartment", "villa", "all"]).optional(),
         neighborhood: z.string().optional().describe("Neighborhood name(s), comma-separated"),
       },
+      READ_ONLY,
       async (params) => textResult("get_area_distribution", await callApi(buildUrl("/api/area-histogram", {
         city: params.city, listing_type: params.listing_type,
         property_type: params.property_type, neighborhood: params.neighborhood,
@@ -236,6 +245,7 @@ export class MyMCP extends McpAgent {
       "get_listing_market_stats",
       "Get market context for a specific listing: price/area percentiles, neighborhood comparison, and bedroom price chart.",
       { id: z.number().describe("Listing ID") },
+      READ_ONLY,
       async ({ id }) => textResult("get_listing_market_stats", await callApi(buildUrl("/api/listing-stats", { id }))),
     );
 
@@ -248,6 +258,7 @@ export class MyMCP extends McpAgent {
         listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
         property_type: z.enum(["apartment", "villa", "all"]).optional(),
       },
+      READ_ONLY,
       async (params) => textResult("compare_neighborhoods", await callApi(buildUrl("/api/neighborhood-compare", {
         city: params.city, neighborhoods: params.neighborhoods,
         listing_type: params.listing_type, property_type: params.property_type,
@@ -261,6 +272,7 @@ export class MyMCP extends McpAgent {
         city: z.enum(CITY_ENUM).optional().default("riyadh"),
         listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
       },
+      READ_ONLY,
       async (params) => textResult("get_market_summary", await callApi(buildUrl("/api/market-summary", {
         city: params.city, listing_type: params.listing_type,
       })), params),
@@ -276,6 +288,7 @@ export class MyMCP extends McpAgent {
         property_type: z.enum(["apartment", "villa", "all"]).optional(),
         months: z.number().optional().default(6).describe("How many months of history (max 24)"),
       },
+      READ_ONLY,
       async (params) => textResult("get_neighborhood_trends", await callApi(buildUrl("/api/neighborhood-trends", {
         city: params.city, neighborhoods: params.neighborhoods,
         listing_type: params.listing_type, property_type: params.property_type,
@@ -289,6 +302,7 @@ export class MyMCP extends McpAgent {
       "list_neighborhoods",
       "List all neighborhoods in a city with Arabic and English names.",
       { city: z.enum(CITY_ENUM).optional().default("riyadh") },
+      READ_ONLY,
       async ({ city }) => textResult("list_neighborhoods", await callApi(buildUrl("/api/neighborhoods", { city })), { city }),
     );
 
@@ -296,6 +310,7 @@ export class MyMCP extends McpAgent {
       "list_city_directions",
       "Get districts/directions of a city with their neighborhoods. Note: data from external API, may be slower.",
       { city: z.enum(CITY_ENUM).optional().default("riyadh") },
+      READ_ONLY,
       async ({ city }) => textResult("list_city_directions", await callApi(buildUrl("/api/directions", { city })), { city }),
     );
 
@@ -306,6 +321,7 @@ export class MyMCP extends McpAgent {
         city: z.enum(CITY_ENUM).describe("City slug"),
         neighborhood: z.string().describe("Neighborhood English name (use list_neighborhoods to get valid names)"),
       },
+      READ_ONLY,
       async ({ city, neighborhood }) => textResult("get_neighborhood_pois", await callApi(buildUrl("/api/neighborhood-pois", {
         city: CITY_SLUG_TO_NAME[city] ?? city, neighborhood,
       })), { city }),
@@ -322,6 +338,7 @@ export class MyMCP extends McpAgent {
         city: z.enum(CITY_ENUM).optional().default("riyadh"),
         sort: z.enum(["relevance", "price_asc", "price_desc", "area_desc", "newest"]).optional(),
       },
+      READ_ONLY,
       async (params) => textResult("get_map_listings", await callApi(buildUrl("/api/map-listings", {
         bounds: params.bounds, zoom: params.zoom, listing_type: params.listing_type,
         property_type: params.property_type, city: params.city, sort: params.sort,
@@ -335,6 +352,7 @@ export class MyMCP extends McpAgent {
         bounds: z.string().describe("Bounding box as 'south,west,north,east' coordinates"),
         zoom: z.number().optional().default(12).describe("Map zoom level (min 10 for results)"),
       },
+      READ_ONLY,
       async ({ bounds, zoom }) => textResult("get_map_pois", await callApi(buildUrl("/api/map-pois", { bounds, zoom }))),
     );
   }
