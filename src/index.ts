@@ -156,15 +156,19 @@ function textResult(toolName: string, data: unknown, params: Record<string, unkn
   };
 }
 
+/** Max thumbnails per request (CF Workers allows 50 subrequests; 1 for API call, 49 for images). */
+const MAX_THUMBNAILS = 49;
+
 /**
  * Like textResult but injects thumbnail_b64 data URIs into listing objects.
  * Claude can then use these in widget <img src="..."> tags.
+ * Only fetches thumbnails when includeThumbnails is true.
  */
 async function resultWithThumbnails(
   toolName: string,
   data: unknown,
   params: Record<string, unknown> = {},
-  maxThumbs = 5,
+  includeThumbnails = false,
 ) {
   const rewritten = rewriteUrls(data);
   const isError = !!(rewritten && typeof rewritten === "object" && "error" in rewritten);
@@ -177,7 +181,9 @@ async function resultWithThumbnails(
     };
   }
 
-  await injectThumbnails(rewritten, maxThumbs);
+  if (includeThumbnails) {
+    await injectThumbnails(rewritten, MAX_THUMBNAILS);
+  }
 
   return {
     content: [{ type: "text" as const, text: JSON.stringify(rewritten, null, 2) }],
@@ -228,28 +234,35 @@ export class MyMCP extends McpAgent {
           "bedrooms_desc", "oldest_listing", "recently_updated",
         ]).optional().default("relevance").describe("Sort order"),
         page: z.number().optional().default(1).describe("Page number"),
-        page_size: z.number().optional().default(30).describe("Results per page (max 100)"),
+        page_size: z.number().optional().describe("Results per page (max 100). Defaults to 12 when include_thumbnails is true, 30 otherwise."),
+        include_thumbnails: z.boolean().optional().default(false).describe("Include base64 thumbnail_b64 data URI on each listing for use in widget <img> tags. Defaults page_size to 12 when enabled."),
       },
       READ_ONLY,
-      async (params) => resultWithThumbnails("search_listings", await callApi(buildUrl("/api/listings", {
-        city: params.city, listing_type: params.listing_type, property_type: params.property_type,
-        price_min: params.price_min, price_max: params.price_max, beds: params.beds,
-        neighborhood: params.neighborhood, amenities: params.amenities, furnished: params.furnished,
-        area_min: params.area_min, area_max: params.area_max, bathrooms: params.bathrooms,
-        floor: params.floor, source: params.source, max_age: params.max_age,
-        updated_within: params.updated_within, verified: params.verified,
-        advertiser_type: params.advertiser_type, compound: params.compound,
-        duplex: params.duplex, livings: params.livings,
-        sort: params.sort, page: params.page, page_size: params.page_size,
-      })), params, 5),
+      async (params) => {
+        const pageSize = params.page_size ?? (params.include_thumbnails ? 12 : 30);
+        return resultWithThumbnails("search_listings", await callApi(buildUrl("/api/listings", {
+          city: params.city, listing_type: params.listing_type, property_type: params.property_type,
+          price_min: params.price_min, price_max: params.price_max, beds: params.beds,
+          neighborhood: params.neighborhood, amenities: params.amenities, furnished: params.furnished,
+          area_min: params.area_min, area_max: params.area_max, bathrooms: params.bathrooms,
+          floor: params.floor, source: params.source, max_age: params.max_age,
+          updated_within: params.updated_within, verified: params.verified,
+          advertiser_type: params.advertiser_type, compound: params.compound,
+          duplex: params.duplex, livings: params.livings,
+          sort: params.sort, page: params.page, page_size: pageSize,
+        })), params, params.include_thumbnails);
+      },
     );
 
     this.server.tool(
       "get_listing",
       "Get full details for a specific property listing by its ID.",
-      { id: z.number().describe("Listing ID") },
+      {
+        id: z.number().describe("Listing ID"),
+        include_thumbnails: z.boolean().optional().default(false).describe("Include base64 thumbnail_b64 data URI for use in widget <img> tags."),
+      },
       READ_ONLY,
-      async ({ id }) => resultWithThumbnails("get_listing", await callApi(buildUrl(`/api/listings/${id}`)), {}, 1),
+      async ({ id, include_thumbnails }) => resultWithThumbnails("get_listing", await callApi(buildUrl(`/api/listings/${id}`)), {}, include_thumbnails),
     );
 
     this.server.tool(
@@ -257,10 +270,14 @@ export class MyMCP extends McpAgent {
       "Find similar nearby listings for price comparison. Returns listings within ~5km with same property type and similar bedroom count (+/-1).",
       {
         id: z.number().describe("Listing ID to find comparables for"),
-        limit: z.number().optional().default(50).describe("Max results (max 100)"),
+        limit: z.number().optional().describe("Max results (max 100). Defaults to 12 when include_thumbnails is true, 50 otherwise."),
+        include_thumbnails: z.boolean().optional().default(false).describe("Include base64 thumbnail_b64 data URI on each listing for use in widget <img> tags. Defaults limit to 12 when enabled."),
       },
       READ_ONLY,
-      async (params) => resultWithThumbnails("get_comparable_listings", await callApi(buildUrl("/api/listing-comparables", { id: params.id, limit: params.limit })), params, 3),
+      async (params) => {
+        const limit = params.limit ?? (params.include_thumbnails ? 12 : 50);
+        return resultWithThumbnails("get_comparable_listings", await callApi(buildUrl("/api/listing-comparables", { id: params.id, limit })), params, params.include_thumbnails);
+      },
     );
 
     this.server.tool(
@@ -283,13 +300,17 @@ export class MyMCP extends McpAgent {
         property_type: z.enum(["apartment", "villa", "all"]).optional(),
         neighborhood: z.string().optional().describe("Neighborhood name(s), comma-separated"),
         beds: z.number().optional().describe("Minimum bedrooms"),
-        limit: z.number().optional().default(30).describe("Max results (max 100)"),
+        limit: z.number().optional().describe("Max results (max 100). Defaults to 12 when include_thumbnails is true, 30 otherwise."),
+        include_thumbnails: z.boolean().optional().default(false).describe("Include base64 thumbnail_b64 data URI on each listing for use in widget <img> tags. Defaults limit to 12 when enabled."),
       },
       READ_ONLY,
-      async (params) => resultWithThumbnails("get_best_value_listings", await callApi(buildUrl("/api/best-value", {
-        city: params.city, listing_type: params.listing_type, property_type: params.property_type,
-        neighborhood: params.neighborhood, beds: params.beds, limit: params.limit,
-      })), params, 5),
+      async (params) => {
+        const limit = params.limit ?? (params.include_thumbnails ? 12 : 30);
+        return resultWithThumbnails("get_best_value_listings", await callApi(buildUrl("/api/best-value", {
+          city: params.city, listing_type: params.listing_type, property_type: params.property_type,
+          neighborhood: params.neighborhood, beds: params.beds, limit,
+        })), params, params.include_thumbnails);
+      },
     );
 
     // --- Market Analytics ---
