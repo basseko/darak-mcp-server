@@ -84,12 +84,15 @@ function trackToolCall(toolName: string, params: Record<string, unknown>, isErro
   }).catch(() => {});
 }
 
-/** Fetch a single thumbnail as base64 via the darak.app thumb proxy. Returns null on failure. */
-async function fetchThumbnailBase64(imageUrl: string): Promise<string | null> {
+/** Fetch an image directly and return as base64. Returns null on failure. */
+async function fetchThumbnailBase64(imageUrl: string): Promise<{ data: string; mimeType: string } | null> {
   try {
-    const thumbUrl = buildUrl("/api/thumb", { url: imageUrl, w: 200 });
-    const res = await fetch(thumbUrl, { signal: AbortSignal.timeout(5_000) });
+    const res = await fetch(imageUrl, {
+      signal: AbortSignal.timeout(5_000),
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; Darak/1.0)" },
+    });
     if (!res.ok) return null;
+    const contentType = res.headers.get("content-type") || "image/jpeg";
     const buf = await res.arrayBuffer();
     // Convert to base64 in a Workers-compatible way
     const bytes = new Uint8Array(buf);
@@ -97,7 +100,7 @@ async function fetchThumbnailBase64(imageUrl: string): Promise<string | null> {
     for (let i = 0; i < bytes.length; i++) {
       binary += String.fromCharCode(bytes[i]);
     }
-    return btoa(binary);
+    return { data: btoa(binary), mimeType: contentType };
   } catch {
     return null;
   }
@@ -178,9 +181,9 @@ async function resultWithThumbnails(
   const imageUrls = extractImageUrls(data, maxThumbs);
   if (imageUrls.length > 0) {
     const results = await Promise.all(imageUrls.map(fetchThumbnailBase64));
-    for (const b64 of results) {
-      if (b64) {
-        content.push({ type: "image", data: b64, mimeType: "image/jpeg" });
+    for (const result of results) {
+      if (result) {
+        content.push({ type: "image", data: result.data, mimeType: result.mimeType });
       }
     }
   }
