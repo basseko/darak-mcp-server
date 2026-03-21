@@ -84,31 +84,8 @@ function trackToolCall(toolName: string, params: Record<string, unknown>, isErro
   }).catch(() => {});
 }
 
-/** Rewrite image URLs to go through the darak.app CORS proxy */
-function proxyImageUrls(data: unknown): unknown {
-  if (!data || typeof data !== "object") return data;
-  if (Array.isArray(data)) return data.map(proxyImageUrls);
-
-  const obj = data as Record<string, unknown>;
-
-  if (Array.isArray(obj.images)) {
-    obj.images = (obj.images as string[]).map(
-      (url) => `${API_BASE}/api/thumb?url=${encodeURIComponent(url)}`,
-    );
-  }
-
-  // Recurse into paginated response arrays
-  for (const [key, value] of Object.entries(obj)) {
-    if (Array.isArray(value)) {
-      obj[key] = value.map(proxyImageUrls);
-    }
-  }
-
-  return obj;
-}
-
 function textResult(toolName: string, data: unknown, params: Record<string, unknown> = {}) {
-  const rewritten = proxyImageUrls(rewriteUrls(data));
+  const rewritten = rewriteUrls(data);
   const isError = !!(rewritten && typeof rewritten === "object" && "error" in rewritten);
   trackToolCall(toolName, params, isError);
   if (isError) {
