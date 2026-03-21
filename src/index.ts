@@ -84,65 +84,31 @@ function trackToolCall(toolName: string, params: Record<string, unknown>, isErro
   }).catch(() => {});
 }
 
-/** Fetch an image and return as a data URI string. Returns null on failure. */
-async function fetchImageDataUri(imageUrl: string): Promise<string | null> {
-  try {
-    const res = await fetch(imageUrl, {
-      signal: AbortSignal.timeout(5_000),
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; Darak/1.0)" },
-    });
-    if (!res.ok) return null;
-    const contentType = res.headers.get("content-type") || "image/jpeg";
-    const buf = await res.arrayBuffer();
-    const bytes = new Uint8Array(buf);
-    let binary = "";
-    for (let i = 0; i < bytes.length; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    return `data:${contentType};base64,${btoa(binary)}`;
-  } catch {
-    return null;
-  }
-}
+/** Rewrite image URLs to go through the darak.app CORS proxy */
+function proxyImageUrls(data: unknown): unknown {
+  if (!data || typeof data !== "object") return data;
+  if (Array.isArray(data)) return data.map(proxyImageUrls);
 
-/**
- * Inject thumbnail_b64 data URIs into listing objects so Claude can use them
- * in widget <img src> tags (artifacts CSP allows data: URIs).
- * Mutates listing objects in place. Fetches up to `max` thumbnails in parallel.
- */
-async function injectThumbnails(data: unknown, max: number): Promise<void> {
-  if (!data || typeof data !== "object") return;
   const obj = data as Record<string, unknown>;
 
-  // Collect listings to process
-  let listings: Record<string, unknown>[] = [];
-
-  // Single listing
-  if (Array.isArray(obj.images) && typeof obj.id === "number") {
-    listings = [obj];
-  }
-  // Paginated response
-  else if (Array.isArray(obj.listings)) {
-    listings = (obj.listings as Record<string, unknown>[]).slice(0, max);
+  if (Array.isArray(obj.images)) {
+    obj.images = (obj.images as string[]).map(
+      (url) => `${API_BASE}/api/thumb?url=${encodeURIComponent(url)}`,
+    );
   }
 
-  if (listings.length === 0) return;
-
-  const tasks = listings.map(async (listing) => {
-    const imgs = listing.images;
-    if (Array.isArray(imgs) && imgs.length > 0) {
-      const dataUri = await fetchImageDataUri(imgs[0] as string);
-      if (dataUri) {
-        listing.thumbnail_b64 = dataUri;
-      }
+  // Recurse into paginated response arrays
+  for (const [key, value] of Object.entries(obj)) {
+    if (Array.isArray(value)) {
+      obj[key] = value.map(proxyImageUrls);
     }
-  });
+  }
 
-  await Promise.all(tasks);
+  return obj;
 }
 
 function textResult(toolName: string, data: unknown, params: Record<string, unknown> = {}) {
-  const rewritten = rewriteUrls(data);
+  const rewritten = proxyImageUrls(rewriteUrls(data));
   const isError = !!(rewritten && typeof rewritten === "object" && "error" in rewritten);
   trackToolCall(toolName, params, isError);
   if (isError) {
@@ -151,40 +117,6 @@ function textResult(toolName: string, data: unknown, params: Record<string, unkn
       isError: true,
     };
   }
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(rewritten, null, 2) }],
-  };
-}
-
-/** Max thumbnails per request (CF Workers allows 50 subrequests; 1 for API call, 49 for images). */
-const MAX_THUMBNAILS = 49;
-
-/**
- * Like textResult but injects thumbnail_b64 data URIs into listing objects.
- * Claude can then use these in widget <img src="..."> tags.
- * Only fetches thumbnails when includeThumbnails is true.
- */
-async function resultWithThumbnails(
-  toolName: string,
-  data: unknown,
-  params: Record<string, unknown> = {},
-  includeThumbnails = false,
-) {
-  const rewritten = rewriteUrls(data);
-  const isError = !!(rewritten && typeof rewritten === "object" && "error" in rewritten);
-  trackToolCall(toolName, params, isError);
-
-  if (isError) {
-    return {
-      content: [{ type: "text" as const, text: JSON.stringify(rewritten, null, 2) }],
-      isError: true,
-    };
-  }
-
-  if (includeThumbnails) {
-    await injectThumbnails(rewritten, MAX_THUMBNAILS);
-  }
-
   return {
     content: [{ type: "text" as const, text: JSON.stringify(rewritten, null, 2) }],
   };
@@ -234,13 +166,11 @@ export class MyMCP extends McpAgent {
           "bedrooms_desc", "oldest_listing", "recently_updated",
         ]).optional().default("relevance").describe("Sort order"),
         page: z.number().optional().default(1).describe("Page number"),
-        page_size: z.number().optional().describe("Results per page (max 100). Defaults to 12 when include_thumbnails is true, 30 otherwise."),
-        include_thumbnails: z.boolean().optional().default(false).describe("Include base64 thumbnail_b64 data URI on each listing for use in widget <img> tags. Defaults page_size to 12 when enabled."),
+        page_size: z.number().optional().default(30).describe("Results per page (max 100)"),
       },
       READ_ONLY,
       async (params) => {
-        const pageSize = params.page_size ?? (params.include_thumbnails ? 12 : 30);
-        return resultWithThumbnails("search_listings", await callApi(buildUrl("/api/listings", {
+        return textResult("search_listings", await callApi(buildUrl("/api/listings", {
           city: params.city, listing_type: params.listing_type, property_type: params.property_type,
           price_min: params.price_min, price_max: params.price_max, beds: params.beds,
           neighborhood: params.neighborhood, amenities: params.amenities, furnished: params.furnished,
@@ -249,8 +179,8 @@ export class MyMCP extends McpAgent {
           updated_within: params.updated_within, verified: params.verified,
           advertiser_type: params.advertiser_type, compound: params.compound,
           duplex: params.duplex, livings: params.livings,
-          sort: params.sort, page: params.page, page_size: pageSize,
-        })), params, params.include_thumbnails);
+          sort: params.sort, page: params.page, page_size: params.page_size,
+        })), params);
       },
     );
 
@@ -259,10 +189,9 @@ export class MyMCP extends McpAgent {
       "Get full details for a specific property listing by its ID.",
       {
         id: z.number().describe("Listing ID"),
-        include_thumbnails: z.boolean().optional().default(false).describe("Include base64 thumbnail_b64 data URI for use in widget <img> tags."),
       },
       READ_ONLY,
-      async ({ id, include_thumbnails }) => resultWithThumbnails("get_listing", await callApi(buildUrl(`/api/listings/${id}`)), {}, include_thumbnails),
+      async ({ id }) => textResult("get_listing", await callApi(buildUrl(`/api/listings/${id}`))),
     );
 
     this.server.tool(
@@ -270,13 +199,11 @@ export class MyMCP extends McpAgent {
       "Find similar nearby listings for price comparison. Returns listings within ~5km with same property type and similar bedroom count (+/-1).",
       {
         id: z.number().describe("Listing ID to find comparables for"),
-        limit: z.number().optional().describe("Max results (max 100). Defaults to 12 when include_thumbnails is true, 50 otherwise."),
-        include_thumbnails: z.boolean().optional().default(false).describe("Include base64 thumbnail_b64 data URI on each listing for use in widget <img> tags. Defaults limit to 12 when enabled."),
+        limit: z.number().optional().default(50).describe("Max results (max 100)"),
       },
       READ_ONLY,
       async (params) => {
-        const limit = params.limit ?? (params.include_thumbnails ? 12 : 50);
-        return resultWithThumbnails("get_comparable_listings", await callApi(buildUrl("/api/listing-comparables", { id: params.id, limit })), params, params.include_thumbnails);
+        return textResult("get_comparable_listings", await callApi(buildUrl("/api/listing-comparables", { id: params.id, limit: params.limit })), params);
       },
     );
 
@@ -293,23 +220,21 @@ export class MyMCP extends McpAgent {
 
     this.server.tool(
       "get_best_value_listings",
-      "Find listings priced below their neighborhood median — best deals. Returns listings sorted by discount percentage (biggest savings first). When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
+      "Find listings priced below their neighborhood median -- best deals. Returns listings sorted by discount percentage (biggest savings first). When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
       {
         city: z.enum(CITY_ENUM).optional().default("riyadh"),
         listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
         property_type: z.enum(["apartment", "villa", "all"]).optional(),
         neighborhood: z.string().optional().describe("Neighborhood name(s), comma-separated"),
         beds: z.number().optional().describe("Minimum bedrooms"),
-        limit: z.number().optional().describe("Max results (max 100). Defaults to 12 when include_thumbnails is true, 30 otherwise."),
-        include_thumbnails: z.boolean().optional().default(false).describe("Include base64 thumbnail_b64 data URI on each listing for use in widget <img> tags. Defaults limit to 12 when enabled."),
+        limit: z.number().optional().default(30).describe("Max results (max 100)"),
       },
       READ_ONLY,
       async (params) => {
-        const limit = params.limit ?? (params.include_thumbnails ? 12 : 30);
-        return resultWithThumbnails("get_best_value_listings", await callApi(buildUrl("/api/best-value", {
+        return textResult("get_best_value_listings", await callApi(buildUrl("/api/best-value", {
           city: params.city, listing_type: params.listing_type, property_type: params.property_type,
-          neighborhood: params.neighborhood, beds: params.beds, limit,
-        })), params, params.include_thumbnails);
+          neighborhood: params.neighborhood, beds: params.beds, limit: params.limit,
+        })), params);
       },
     );
 
