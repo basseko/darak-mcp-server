@@ -84,6 +84,56 @@ function trackToolCall(toolName: string, params: Record<string, unknown>, isErro
   }).catch(() => {});
 }
 
+/** Fetch a single thumbnail as base64 via the darak.app thumb proxy. Returns null on failure. */
+async function fetchThumbnailBase64(imageUrl: string): Promise<string | null> {
+  try {
+    const thumbUrl = buildUrl("/api/thumb", { url: imageUrl, w: 200 });
+    const res = await fetch(thumbUrl, { signal: AbortSignal.timeout(5_000) });
+    if (!res.ok) return null;
+    const buf = await res.arrayBuffer();
+    // Convert to base64 in a Workers-compatible way
+    const bytes = new Uint8Array(buf);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  } catch {
+    return null;
+  }
+}
+
+/** Extract image URLs from API response listings, up to `max` items. */
+function extractImageUrls(data: unknown, max: number): string[] {
+  if (!data || typeof data !== "object") return [];
+  const obj = data as Record<string, unknown>;
+
+  // Single listing with images array
+  if (Array.isArray(obj.images) && obj.images.length > 0) {
+    return [obj.images[0] as string];
+  }
+
+  // Paginated response with listings array
+  const listings = obj.listings as unknown[] | undefined;
+  if (!Array.isArray(listings)) return [];
+
+  const urls: string[] = [];
+  for (const item of listings) {
+    if (urls.length >= max) break;
+    if (item && typeof item === "object") {
+      const imgs = (item as Record<string, unknown>).images;
+      if (Array.isArray(imgs) && imgs.length > 0) {
+        urls.push(imgs[0] as string);
+      }
+    }
+  }
+  return urls;
+}
+
+type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
+
 function textResult(toolName: string, data: unknown, params: Record<string, unknown> = {}) {
   const rewritten = rewriteUrls(data);
   const isError = !!(rewritten && typeof rewritten === "object" && "error" in rewritten);
@@ -97,6 +147,45 @@ function textResult(toolName: string, data: unknown, params: Record<string, unkn
   return {
     content: [{ type: "text" as const, text: JSON.stringify(rewritten, null, 2) }],
   };
+}
+
+/**
+ * Like textResult but also fetches thumbnails and includes them as image content blocks.
+ * `maxThumbs` controls how many listing thumbnails to fetch (to avoid bloating the response).
+ */
+async function resultWithThumbnails(
+  toolName: string,
+  data: unknown,
+  params: Record<string, unknown> = {},
+  maxThumbs = 5,
+) {
+  const rewritten = rewriteUrls(data);
+  const isError = !!(rewritten && typeof rewritten === "object" && "error" in rewritten);
+  trackToolCall(toolName, params, isError);
+
+  if (isError) {
+    return {
+      content: [{ type: "text" as const, text: JSON.stringify(rewritten, null, 2) }],
+      isError: true,
+    };
+  }
+
+  const content: ContentBlock[] = [
+    { type: "text", text: JSON.stringify(rewritten, null, 2) },
+  ];
+
+  // Fetch thumbnails in parallel
+  const imageUrls = extractImageUrls(data, maxThumbs);
+  if (imageUrls.length > 0) {
+    const results = await Promise.all(imageUrls.map(fetchThumbnailBase64));
+    for (const b64 of results) {
+      if (b64) {
+        content.push({ type: "image", data: b64, mimeType: "image/jpeg" });
+      }
+    }
+  }
+
+  return { content };
 }
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false } as const;
@@ -146,7 +235,7 @@ export class MyMCP extends McpAgent {
         page_size: z.number().optional().default(30).describe("Results per page (max 100)"),
       },
       READ_ONLY,
-      async (params) => textResult("search_listings", await callApi(buildUrl("/api/listings", {
+      async (params) => resultWithThumbnails("search_listings", await callApi(buildUrl("/api/listings", {
         city: params.city, listing_type: params.listing_type, property_type: params.property_type,
         price_min: params.price_min, price_max: params.price_max, beds: params.beds,
         neighborhood: params.neighborhood, amenities: params.amenities, furnished: params.furnished,
@@ -156,7 +245,7 @@ export class MyMCP extends McpAgent {
         advertiser_type: params.advertiser_type, compound: params.compound,
         duplex: params.duplex, livings: params.livings,
         sort: params.sort, page: params.page, page_size: params.page_size,
-      })), params),
+      })), params, 5),
     );
 
     this.server.tool(
@@ -164,7 +253,7 @@ export class MyMCP extends McpAgent {
       "Get full details for a specific property listing by its ID.",
       { id: z.number().describe("Listing ID") },
       READ_ONLY,
-      async ({ id }) => textResult("get_listing", await callApi(buildUrl(`/api/listings/${id}`))),
+      async ({ id }) => resultWithThumbnails("get_listing", await callApi(buildUrl(`/api/listings/${id}`)), {}, 1),
     );
 
     this.server.tool(
@@ -175,7 +264,7 @@ export class MyMCP extends McpAgent {
         limit: z.number().optional().default(50).describe("Max results (max 100)"),
       },
       READ_ONLY,
-      async (params) => textResult("get_comparable_listings", await callApi(buildUrl("/api/listing-comparables", { id: params.id, limit: params.limit }))),
+      async (params) => resultWithThumbnails("get_comparable_listings", await callApi(buildUrl("/api/listing-comparables", { id: params.id, limit: params.limit })), params, 3),
     );
 
     this.server.tool(
@@ -201,10 +290,10 @@ export class MyMCP extends McpAgent {
         limit: z.number().optional().default(30).describe("Max results (max 100)"),
       },
       READ_ONLY,
-      async (params) => textResult("get_best_value_listings", await callApi(buildUrl("/api/best-value", {
+      async (params) => resultWithThumbnails("get_best_value_listings", await callApi(buildUrl("/api/best-value", {
         city: params.city, listing_type: params.listing_type, property_type: params.property_type,
         neighborhood: params.neighborhood, beds: params.beds, limit: params.limit,
-      })), params),
+      })), params, 5),
     );
 
     // --- Market Analytics ---
