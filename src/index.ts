@@ -84,8 +84,8 @@ function trackToolCall(toolName: string, params: Record<string, unknown>, isErro
   }).catch(() => {});
 }
 
-/** Fetch an image directly and return as base64. Returns null on failure. */
-async function fetchThumbnailBase64(imageUrl: string): Promise<{ data: string; mimeType: string } | null> {
+/** Fetch an image and return as a data URI string. Returns null on failure. */
+async function fetchImageDataUri(imageUrl: string): Promise<string | null> {
   try {
     const res = await fetch(imageUrl, {
       signal: AbortSignal.timeout(5_000),
@@ -94,48 +94,52 @@ async function fetchThumbnailBase64(imageUrl: string): Promise<{ data: string; m
     if (!res.ok) return null;
     const contentType = res.headers.get("content-type") || "image/jpeg";
     const buf = await res.arrayBuffer();
-    // Convert to base64 in a Workers-compatible way
     const bytes = new Uint8Array(buf);
     let binary = "";
     for (let i = 0; i < bytes.length; i++) {
       binary += String.fromCharCode(bytes[i]);
     }
-    return { data: btoa(binary), mimeType: contentType };
+    return `data:${contentType};base64,${btoa(binary)}`;
   } catch {
     return null;
   }
 }
 
-/** Extract image URLs from API response listings, up to `max` items. */
-function extractImageUrls(data: unknown, max: number): string[] {
-  if (!data || typeof data !== "object") return [];
+/**
+ * Inject thumbnail_b64 data URIs into listing objects so Claude can use them
+ * in widget <img src> tags (artifacts CSP allows data: URIs).
+ * Mutates listing objects in place. Fetches up to `max` thumbnails in parallel.
+ */
+async function injectThumbnails(data: unknown, max: number): Promise<void> {
+  if (!data || typeof data !== "object") return;
   const obj = data as Record<string, unknown>;
 
-  // Single listing with images array
-  if (Array.isArray(obj.images) && obj.images.length > 0) {
-    return [obj.images[0] as string];
+  // Collect listings to process
+  let listings: Record<string, unknown>[] = [];
+
+  // Single listing
+  if (Array.isArray(obj.images) && typeof obj.id === "number") {
+    listings = [obj];
+  }
+  // Paginated response
+  else if (Array.isArray(obj.listings)) {
+    listings = (obj.listings as Record<string, unknown>[]).slice(0, max);
   }
 
-  // Paginated response with listings array
-  const listings = obj.listings as unknown[] | undefined;
-  if (!Array.isArray(listings)) return [];
+  if (listings.length === 0) return;
 
-  const urls: string[] = [];
-  for (const item of listings) {
-    if (urls.length >= max) break;
-    if (item && typeof item === "object") {
-      const imgs = (item as Record<string, unknown>).images;
-      if (Array.isArray(imgs) && imgs.length > 0) {
-        urls.push(imgs[0] as string);
+  const tasks = listings.map(async (listing) => {
+    const imgs = listing.images;
+    if (Array.isArray(imgs) && imgs.length > 0) {
+      const dataUri = await fetchImageDataUri(imgs[0] as string);
+      if (dataUri) {
+        listing.thumbnail_b64 = dataUri;
       }
     }
-  }
-  return urls;
-}
+  });
 
-type ContentBlock =
-  | { type: "text"; text: string }
-  | { type: "image"; data: string; mimeType: string };
+  await Promise.all(tasks);
+}
 
 function textResult(toolName: string, data: unknown, params: Record<string, unknown> = {}) {
   const rewritten = rewriteUrls(data);
@@ -153,8 +157,8 @@ function textResult(toolName: string, data: unknown, params: Record<string, unkn
 }
 
 /**
- * Like textResult but also fetches thumbnails and includes them as image content blocks.
- * `maxThumbs` controls how many listing thumbnails to fetch (to avoid bloating the response).
+ * Like textResult but injects thumbnail_b64 data URIs into listing objects.
+ * Claude can then use these in widget <img src="..."> tags.
  */
 async function resultWithThumbnails(
   toolName: string,
@@ -173,22 +177,11 @@ async function resultWithThumbnails(
     };
   }
 
-  const content: ContentBlock[] = [
-    { type: "text", text: JSON.stringify(rewritten, null, 2) },
-  ];
+  await injectThumbnails(rewritten, maxThumbs);
 
-  // Fetch thumbnails in parallel
-  const imageUrls = extractImageUrls(data, maxThumbs);
-  if (imageUrls.length > 0) {
-    const results = await Promise.all(imageUrls.map(fetchThumbnailBase64));
-    for (const result of results) {
-      if (result) {
-        content.push({ type: "image", data: result.data, mimeType: result.mimeType });
-      }
-    }
-  }
-
-  return { content };
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(rewritten, null, 2) }],
+  };
 }
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false } as const;
