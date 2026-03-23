@@ -2,7 +2,7 @@
 
 Remote MCP server for Saudi real estate data. Gives AI assistants access to 65,000+ rental and sale property listings across 5 Saudi cities, with market analytics, neighborhood comparisons, and price trends.
 
-**Server URL:** `https://mcp.darak.app/mcp`
+**Server URL:** `https://darak.app/mcp`
 
 ## Tools (16, all read-only)
 
@@ -47,7 +47,7 @@ Riyadh, Jeddah, Eastern Province, Makkah, Madinah.
   "mcpServers": {
     "darak": {
       "command": "npx",
-      "args": ["mcp-remote", "https://mcp.darak.app/mcp"]
+      "args": ["mcp-remote", "https://darak.app/mcp"]
     }
   }
 }
@@ -56,12 +56,12 @@ Riyadh, Jeddah, Eastern Province, Makkah, Madinah.
 ### Claude Code (CLI)
 
 ```bash
-claude mcp add --transport http darak https://mcp.darak.app/mcp
+claude mcp add --transport http darak https://darak.app/mcp
 ```
 
 ### Any MCP client (Streamable HTTP)
 
-Connect directly to `https://mcp.darak.app/mcp` using the Streamable HTTP transport.
+Connect directly to `https://darak.app/mcp` using the Streamable HTTP transport.
 
 ## Development
 
@@ -93,5 +93,5 @@ See [https://darak.app/privacy](https://darak.app/privacy) for the full privacy 
 ## Support
 
 - Website: [darak.app](https://darak.app)
-- Issues: [github.com/your-repo/issues](https://github.com/your-repo/issues)
+- Issues: [github.com/basseko/darak-mcp-server/issues](https://github.com/basseko/darak-mcp-server/issues)
 - Twitter/X: [@getdarak](https://x.com/getdarak)
