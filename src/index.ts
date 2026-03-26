@@ -27,14 +27,6 @@ const PROPERTY_TYPE_ENUM = [
   "all",
 ] as const;
 
-const CITY_SLUG_TO_NAME: Record<string, string> = {
-  riyadh: "Riyadh",
-  jeddah: "Jeddah",
-  eastern_province: "Eastern Province",
-  makkah: "Makkah",
-  madinah: "Madinah",
-};
-
 function buildUrl(
   path: string,
   params?: Record<string, string | number | boolean | undefined>,
@@ -180,7 +172,7 @@ export class MyMCP extends McpAgent<Env> {
         property_type: z.enum(PROPERTY_TYPE_ENUM).optional().describe("Property type: apartment, villa, land, building, office, shop, warehouse, floor, duplex, or 'all' for no filter"),
         price_min: z.number().optional().describe("Minimum price in SAR"),
         price_max: z.number().optional().describe("Maximum price in SAR"),
-        beds: z.number().optional().describe("Minimum number of bedrooms"),
+        beds: z.number().optional().describe("Number of bedrooms (exact match for 1-4, minimum for 5+)"),
         neighborhood: z.string().optional().describe("Neighborhood name(s), comma-separated. Use list_neighborhoods to get valid names."),
         amenities: z.string().optional().describe("Comma-separated: ac, kitchen, maid_room, parking, private_roof, lift, pool"),
         furnished: z.boolean().optional().describe("Filter by furnished status"),
@@ -194,9 +186,10 @@ export class MyMCP extends McpAgent<Env> {
         verified: z.boolean().optional().describe("Filter by verified listings only"),
         advertiser_type: z.enum(["owner", "agent", "developer"]).optional().describe("Filter by advertiser type"),
         compound: z.string().optional().describe("Filter by compound/community name (partial match)"),
-        duplex: z.boolean().optional().describe("Filter for duplex units"),
         livings: z.number().optional().describe("Minimum number of living rooms"),
-        sort: z.enum(["relevance", "price_asc", "price_desc", "area_desc", "newest", "price_per_sqm_asc", "price_per_sqm_desc", "best_value", "bedrooms_desc", "oldest_listing", "recently_updated"]).optional().default("relevance").describe("Sort order"),
+        min_days_on_market: z.number().optional().describe("Only listings on market for at least N days"),
+        max_days_on_market: z.number().optional().describe("Only listings on market for at most N days"),
+        sort: z.enum(["relevance", "price_asc", "price_desc", "area_desc", "newest", "price_per_sqm_asc", "price_per_sqm_desc", "best_value", "bedrooms_desc", "oldest_listing", "recently_updated", "days_on_market_desc"]).optional().default("relevance").describe("Sort order"),
         page: z.number().optional().default(1).describe("Page number"),
         page_size: z.number().optional().default(30).describe("Results per page (max 100)"),
       },
@@ -210,7 +203,8 @@ export class MyMCP extends McpAgent<Env> {
         floor: params.floor, source: params.source, max_age: params.max_age,
         updated_within: params.updated_within, verified: params.verified,
         advertiser_type: params.advertiser_type, compound: params.compound,
-        duplex: params.duplex, livings: params.livings,
+        livings: params.livings, min_days_on_market: params.min_days_on_market,
+        max_days_on_market: params.max_days_on_market,
         sort: params.sort, page: params.page, page_size: params.page_size,
       })), params);
     });
@@ -248,7 +242,7 @@ export class MyMCP extends McpAgent<Env> {
         listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
         property_type: z.enum(PROPERTY_TYPE_ENUM).optional(),
         neighborhood: z.string().optional().describe("Neighborhood name(s), comma-separated"),
-        beds: z.number().optional().describe("Minimum bedrooms"),
+        beds: z.number().optional().describe("Exact number of bedrooms"),
         limit: z.number().optional().default(30).describe("Max results (max 100)"),
       },
       annotations: READ_ONLY,
@@ -262,7 +256,7 @@ export class MyMCP extends McpAgent<Env> {
     // --- Market Analytics ---
 
     this.server.registerTool("get_price_distribution", {
-      description: "Get price distribution histogram. Returns 30 buckets with counts, plus median and mean. When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
+      description: "Get price distribution histogram. Returns 30 buckets with counts, median, mean, and cumulative percentiles (e.g. '72% of listings are under 50K'). When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
       inputSchema: {
         city: z.enum(CITY_ENUM).optional().default("riyadh"),
         listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
@@ -296,7 +290,7 @@ export class MyMCP extends McpAgent<Env> {
     }, async ({ id }) => result("get_listing_market_stats", await callApi(buildUrl("/api/listing-stats", { id }))));
 
     this.server.registerTool("compare_neighborhoods", {
-      description: "Compare 2-5 neighborhoods side by side. Returns median price, area, price/sqm, price range (P25-P75), amenity percentages, property mix, and bedroom breakdown for each. IMPORTANT: Call list_neighborhoods first to get exact English names.",
+      description: "Compare 2-5 neighborhoods side by side. Returns median price, area, price/sqm, price range (P25-P75), amenity percentages, property mix, bedroom breakdown, gross rental yield, and rent-to-income ratio (for rent listings). IMPORTANT: Call list_neighborhoods first to get exact English names.",
       inputSchema: {
         city: z.enum(CITY_ENUM).optional().default("riyadh"),
         neighborhoods: z.string().describe("2-5 neighborhood English names, comma-separated. Use list_neighborhoods to get valid names."),
@@ -309,8 +303,60 @@ export class MyMCP extends McpAgent<Env> {
       listing_type: params.listing_type, property_type: params.property_type,
     })), params));
 
+    this.server.registerTool("get_rental_yield", {
+      description: "Calculate gross rental yield for a neighborhood or city by comparing median sale price to median annual rent. Returns yield percentage, listing counts, and top 10 neighborhoods by yield when no neighborhood is specified. Use to fact-check investment return claims.",
+      inputSchema: {
+        city: z.enum(CITY_ENUM).optional().default("riyadh"),
+        neighborhood: z.string().optional().describe("Neighborhood name(s), comma-separated. Use list_neighborhoods to get valid names."),
+        property_type: z.enum(PROPERTY_TYPE_ENUM).optional(),
+      },
+      annotations: READ_ONLY,
+    }, async (params) => result("get_rental_yield", await callApi(buildUrl("/api/rental-yield", {
+      city: params.city, neighborhood: params.neighborhood, property_type: params.property_type,
+    })), params));
+
+    this.server.registerTool("get_supply_stats", {
+      description: "Get new listing volume trends: how many listings appeared this week vs last week, this month vs last month. Use to assess whether supply is increasing or decreasing.",
+      inputSchema: {
+        city: z.enum(CITY_ENUM).optional().default("riyadh"),
+        listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
+        neighborhood: z.string().optional().describe("Neighborhood name(s), comma-separated"),
+        property_type: z.enum(PROPERTY_TYPE_ENUM).optional(),
+      },
+      annotations: READ_ONLY,
+    }, async (params) => result("get_supply_stats", await callApi(buildUrl("/api/supply-stats", {
+      city: params.city, listing_type: params.listing_type,
+      neighborhood: params.neighborhood, property_type: params.property_type,
+    })), params));
+
+    this.server.registerTool("get_vacancy_indicator", {
+      description: "Count stale listings (on market 30/60/90+ days) as an oversupply signal. Returns stale counts, percentages, and a freshness score (healthy/moderate/oversaturated).",
+      inputSchema: {
+        city: z.enum(CITY_ENUM).optional().default("riyadh"),
+        listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
+        neighborhood: z.string().optional().describe("Neighborhood name(s), comma-separated"),
+        property_type: z.enum(PROPERTY_TYPE_ENUM).optional(),
+      },
+      annotations: READ_ONLY,
+    }, async (params) => result("get_vacancy_indicator", await callApi(buildUrl("/api/vacancy-indicator", {
+      city: params.city, listing_type: params.listing_type,
+      neighborhood: params.neighborhood, property_type: params.property_type,
+    })), params));
+
+    this.server.registerTool("get_neighborhood_rent_map", {
+      description: "Get median rent and listing count for every neighborhood in a city. Returns all neighborhoods sorted by median price descending. Use for city-wide rent comparisons and finding cheapest/most expensive areas.",
+      inputSchema: {
+        city: z.enum(CITY_ENUM).optional().default("riyadh"),
+        listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
+        bedrooms: z.string().optional().describe("Filter by bedroom count, or 'all' for aggregate"),
+      },
+      annotations: READ_ONLY,
+    }, async (params) => result("get_neighborhood_rent_map", await callApi(buildUrl("/api/neighborhood-rent-map", {
+      city: params.city, listing_type: params.listing_type, bedrooms: params.bedrooms,
+    })), params));
+
     this.server.registerTool("get_market_summary", {
-      description: "Get a high-level market overview for a city: total listings, median price, breakdown by property type, top neighborhoods, source coverage, and data freshness.",
+      description: "Get a high-level market overview for a city: total listings, median price, breakdown by property type, top neighborhoods, source coverage, data freshness, and YoY median price change.",
       inputSchema: {
         city: z.enum(CITY_ENUM).optional().default("riyadh"),
         listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
@@ -358,7 +404,7 @@ export class MyMCP extends McpAgent<Env> {
       },
       annotations: READ_ONLY,
     }, async ({ city, neighborhood }) => result("get_neighborhood_pois", await callApi(buildUrl("/api/neighborhood-pois", {
-      city: CITY_SLUG_TO_NAME[city] ?? city, neighborhood,
+      city, neighborhood,
     })), { city }));
 
     this.server.registerTool("get_map_listings", {
