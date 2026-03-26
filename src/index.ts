@@ -74,8 +74,8 @@ function rewriteUrls(data: unknown): unknown {
 
   const obj = data as Record<string, unknown>;
 
-  // Single listing object — has id + source_url
-  if (typeof obj.id === "number" && "source_url" in obj) {
+  // Single listing object — has numeric id
+  if (typeof obj.id === "number") {
     const { source_url: _, ...rest } = obj;
     return { ...rest, url: `https://darak.app/listing/${obj.id}` };
   }
@@ -168,7 +168,7 @@ export class MyMCP extends McpAgent<Env> {
       "search_listings",
       {
         description:
-          "Search Saudi rental or sale property listings with filters. Returns paginated results. Prices are in SAR. IMPORTANT: When filtering by neighborhood, you MUST first call list_neighborhoods to get the exact English name. Do not guess neighborhood names.",
+          "Search Saudi rental or sale property listings with filters. Returns paginated results with full listing details (price, beds, area, neighborhood, images, URL). Prices are in SAR. For commercial properties (office, shop, warehouse), set listing_category to 'commercial'. IMPORTANT: When filtering by neighborhood, you MUST first call list_neighborhoods to get the exact English name. Do not guess neighborhood names.",
         inputSchema: {
           city: z
             .enum(CITY_ENUM)
@@ -180,6 +180,13 @@ export class MyMCP extends McpAgent<Env> {
             .optional()
             .default("rent")
             .describe("Rent or sale"),
+          listing_category: z
+            .enum(["residential", "commercial"])
+            .optional()
+            .default("residential")
+            .describe(
+              "Property category. Use 'commercial' when searching for office, shop, or warehouse. Use 'residential' (default) for apartment, villa, duplex, floor.",
+            ),
           property_type: z
             .enum(PROPERTY_TYPE_ENUM)
             .optional()
@@ -200,11 +207,23 @@ export class MyMCP extends McpAgent<Env> {
             .describe(
               "Neighborhood name(s), comma-separated. Use list_neighborhoods to get valid names.",
             ),
+          neighborhood_exclude: z
+            .string()
+            .optional()
+            .describe(
+              "Exclude these neighborhoods, comma-separated. Use list_neighborhoods to get valid names.",
+            ),
           amenities: z
             .string()
             .optional()
             .describe(
-              "Comma-separated: ac, kitchen, maid_room, parking, private_roof, lift, pool",
+              "Comma-separated: ac, kitchen, maid_room, parking, private_roof, lift, pool, gym, fiber, keyless_entry, balcony, garden, laundry_room",
+            ),
+          amenities_exclude: z
+            .string()
+            .optional()
+            .describe(
+              "Exclude listings with these amenities, comma-separated (same values as amenities param)",
             ),
           furnished: z
             .boolean()
@@ -212,7 +231,12 @@ export class MyMCP extends McpAgent<Env> {
             .describe("Filter by furnished status"),
           area_min: z.number().optional().describe("Minimum area in sqm"),
           area_max: z.number().optional().describe("Maximum area in sqm"),
-          bathrooms: z.number().optional().describe("Minimum bathrooms"),
+          bathrooms: z
+            .number()
+            .optional()
+            .describe(
+              "Number of bathrooms (exact match for 1-3, minimum for 4+)",
+            ),
           floor: z
             .enum(["ground", "upper"])
             .optional()
@@ -221,6 +245,10 @@ export class MyMCP extends McpAgent<Env> {
             .string()
             .optional()
             .describe("Data source name(s), comma-separated"),
+          source_exclude: z
+            .string()
+            .optional()
+            .describe("Exclude these data sources, comma-separated"),
           max_age: z.number().optional().describe("Max building age in years"),
           updated_within: z
             .enum(["3d", "1w", "1m"])
@@ -263,11 +291,14 @@ export class MyMCP extends McpAgent<Env> {
               "bedrooms_desc",
               "oldest_listing",
               "recently_updated",
+              "price_drop",
               "days_on_market_desc",
             ])
             .optional()
             .default("relevance")
-            .describe("Sort order"),
+            .describe(
+              "Sort order. Use 'price_drop' to find listings that recently reduced their price.",
+            ),
           page: z.number().optional().default(1).describe("Page number"),
           page_size: z
             .number()
@@ -284,18 +315,22 @@ export class MyMCP extends McpAgent<Env> {
             buildUrl("/api/listings", {
               city: params.city,
               listing_type: params.listing_type,
+              listing_category: params.listing_category,
               property_type: params.property_type,
               price_min: params.price_min,
               price_max: params.price_max,
               beds: params.beds,
               neighborhood: params.neighborhood,
+              neighborhood_exclude: params.neighborhood_exclude,
               amenities: params.amenities,
+              amenities_exclude: params.amenities_exclude,
               furnished: params.furnished,
               area_min: params.area_min,
               area_max: params.area_max,
               bathrooms: params.bathrooms,
               floor: params.floor,
               source: params.source,
+              source_exclude: params.source_exclude,
               max_age: params.max_age,
               updated_within: params.updated_within,
               verified: params.verified,
@@ -315,10 +350,79 @@ export class MyMCP extends McpAgent<Env> {
     );
 
     this.server.registerTool(
+      "get_listings_by_ids",
+      {
+        description:
+          "Fetch full details for multiple listings by their IDs in one call (max 200). Use when comparing specific listings or looking up several listings the user referenced.",
+        inputSchema: {
+          ids: z
+            .string()
+            .describe("Comma-separated listing IDs (e.g. '12345,67890')"),
+        },
+        annotations: READ_ONLY,
+      },
+      async (params) => {
+        return result(
+          "get_listings_by_ids",
+          await callApi(buildUrl("/api/listings/by-ids", { ids: params.ids })),
+          params,
+        );
+      },
+    );
+
+    this.server.registerTool(
+      "get_listings_count",
+      {
+        description:
+          "Count listings matching filters without fetching listing data. Returns just { total: number }. Use when the user asks 'how many listings...?' or you need a count for context without the overhead of full results.",
+        inputSchema: {
+          city: z.enum(CITY_ENUM).optional().default("riyadh"),
+          listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
+          listing_category: z
+            .enum(["residential", "commercial"])
+            .optional()
+            .default("residential")
+            .describe(
+              "Use 'commercial' for office, shop, warehouse. Default: 'residential'.",
+            ),
+          property_type: z.enum(PROPERTY_TYPE_ENUM).optional(),
+          neighborhood: z
+            .string()
+            .optional()
+            .describe(
+              "Neighborhood name(s), comma-separated. Use list_neighborhoods to get valid names.",
+            ),
+          beds: z.number().optional().describe("Number of bedrooms"),
+          price_min: z.number().optional().describe("Minimum price in SAR"),
+          price_max: z.number().optional().describe("Maximum price in SAR"),
+        },
+        annotations: READ_ONLY,
+      },
+      async (params) => {
+        return result(
+          "get_listings_count",
+          await callApi(
+            buildUrl("/api/listings/count", {
+              city: params.city,
+              listing_type: params.listing_type,
+              listing_category: params.listing_category,
+              property_type: params.property_type,
+              neighborhood: params.neighborhood,
+              beds: params.beds,
+              price_min: params.price_min,
+              price_max: params.price_max,
+            }),
+          ),
+          params,
+        );
+      },
+    );
+
+    this.server.registerTool(
       "get_listing",
       {
         description:
-          "Get full details for a specific property listing by its ID.",
+          "Get full details for a specific listing by ID. Returns all fields: price, bedrooms, bathrooms, area_sqm, neighborhood (Arabic and English), property_type, images, furnished status, amenities, building age, floor, source, coordinates, and more. Call this before get_listing_market_stats or get_comparable_listings to get the listing's details first.",
         inputSchema: { id: z.number().describe("Listing ID") },
         annotations: READ_ONLY,
       },
@@ -330,7 +434,7 @@ export class MyMCP extends McpAgent<Env> {
       "get_comparable_listings",
       {
         description:
-          "Find similar nearby listings for price comparison. Returns listings within ~5km with same property type and similar bedroom count (+/-1).",
+          "Find similar listings near a specific listing for direct price comparison. Returns up to N nearby listings (within ~5km) matching the same property type and similar bedroom count (+/-1), plus the median price across all comparables. Each comparable includes: id, price, bedrooms, area_sqm, neighborhood, source, and URL. Use get_listing first to get listing details, then this tool to see nearby alternatives at different prices.",
         inputSchema: {
           id: z.number().describe("Listing ID to find comparables for"),
           limit: z
@@ -386,16 +490,30 @@ export class MyMCP extends McpAgent<Env> {
       "get_best_value_listings",
       {
         description:
-          "Find listings priced below their neighborhood median -- best deals. Returns listings sorted by discount percentage (biggest savings first). When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
+          "Find listings priced below their neighborhood median -- best deals. Returns listings sorted by discount percentage (biggest savings first), with each listing showing its price, neighborhood_median, and discount_pct. When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
         inputSchema: {
           city: z.enum(CITY_ENUM).optional().default("riyadh"),
           listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
+          listing_category: z
+            .enum(["residential", "commercial"])
+            .optional()
+            .default("residential")
+            .describe(
+              "Use 'commercial' for office, shop, warehouse. Default: 'residential'.",
+            ),
           property_type: z.enum(PROPERTY_TYPE_ENUM).optional(),
           neighborhood: z
             .string()
             .optional()
             .describe("Neighborhood name(s), comma-separated"),
           beds: z.number().optional().describe("Exact number of bedrooms"),
+          min_discount_pct: z
+            .number()
+            .optional()
+            .default(10)
+            .describe(
+              "Minimum discount percentage below neighborhood median (default 10%)",
+            ),
           limit: z
             .number()
             .optional()
@@ -411,9 +529,11 @@ export class MyMCP extends McpAgent<Env> {
             buildUrl("/api/best-value", {
               city: params.city,
               listing_type: params.listing_type,
+              listing_category: params.listing_category,
               property_type: params.property_type,
               neighborhood: params.neighborhood,
               beds: params.beds,
+              min_discount_pct: params.min_discount_pct,
               limit: params.limit,
             }),
           ),
@@ -428,10 +548,17 @@ export class MyMCP extends McpAgent<Env> {
       "get_price_distribution",
       {
         description:
-          "Get price distribution histogram. Returns 30 buckets with counts, median, mean, and cumulative percentiles (e.g. '72% of listings are under 50K'). When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
+          "Get price distribution histogram for a market segment. Returns 30 buckets with counts, median, mean, and cumulative percentiles (e.g. '72% of listings are under 50K'). Does NOT filter by bedroom count -- shows distribution across all bedrooms for the given filters. When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
         inputSchema: {
           city: z.enum(CITY_ENUM).optional().default("riyadh"),
           listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
+          listing_category: z
+            .enum(["residential", "commercial"])
+            .optional()
+            .default("residential")
+            .describe(
+              "Use 'commercial' for office, shop, warehouse. Default: 'residential'.",
+            ),
           property_type: z.enum(PROPERTY_TYPE_ENUM).optional(),
           neighborhood: z
             .string()
@@ -447,6 +574,7 @@ export class MyMCP extends McpAgent<Env> {
             buildUrl("/api/histogram", {
               city: params.city,
               listing_type: params.listing_type,
+              listing_category: params.listing_category,
               property_type: params.property_type,
               neighborhood: params.neighborhood,
             }),
@@ -459,10 +587,17 @@ export class MyMCP extends McpAgent<Env> {
       "get_area_distribution",
       {
         description:
-          "Get area (sqm) distribution histogram. Returns 30 buckets with counts, plus median and mean. When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
+          "Get area (sqm) distribution histogram. Returns 30 buckets with counts, plus median and mean area. When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
         inputSchema: {
           city: z.enum(CITY_ENUM).optional().default("riyadh"),
           listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
+          listing_category: z
+            .enum(["residential", "commercial"])
+            .optional()
+            .default("residential")
+            .describe(
+              "Use 'commercial' for office, shop, warehouse. Default: 'residential'.",
+            ),
           property_type: z.enum(PROPERTY_TYPE_ENUM).optional(),
           neighborhood: z
             .string()
@@ -478,6 +613,7 @@ export class MyMCP extends McpAgent<Env> {
             buildUrl("/api/area-histogram", {
               city: params.city,
               listing_type: params.listing_type,
+              listing_category: params.listing_category,
               property_type: params.property_type,
               neighborhood: params.neighborhood,
             }),
@@ -490,7 +626,7 @@ export class MyMCP extends McpAgent<Env> {
       "get_listing_market_stats",
       {
         description:
-          "Get market context for a specific listing: price/area percentiles, neighborhood comparison, and bedroom price chart.",
+          "Evaluate whether a listing's price is fair. Returns the listing's price percentile (e.g. 'cheaper than 72% of similar listings'), price range (P5-P95), area percentile, price-per-sqm vs median, neighborhood-level comparison (listing vs neighborhood median with diff%), and a bedroom price chart. Use this FIRST when a user asks 'is this a good deal?' or 'is this overpriced?'. For seeing actual comparable listings side by side, use get_comparable_listings instead.",
         inputSchema: { id: z.number().describe("Listing ID") },
         annotations: READ_ONLY,
       },
@@ -568,7 +704,7 @@ export class MyMCP extends McpAgent<Env> {
       "get_supply_stats",
       {
         description:
-          "Get new listing volume trends: how many listings appeared this week vs last week, this month vs last month. Use to assess whether supply is increasing or decreasing.",
+          "Get new listing volume trends: how many listings appeared this week vs last week, this month vs last month, with percentage changes and total active count. Use to assess whether supply is increasing or decreasing in a market. When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
         inputSchema: {
           city: z.enum(CITY_ENUM).optional().default("riyadh"),
           listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
@@ -599,7 +735,7 @@ export class MyMCP extends McpAgent<Env> {
       "get_vacancy_indicator",
       {
         description:
-          "Count stale listings (on market 30/60/90+ days) as an oversupply signal. Returns stale counts, percentages, and a freshness score (healthy/moderate/oversaturated).",
+          "Count stale listings (on market 30/60/90+ days) as an oversupply signal. Returns stale counts, percentages, and a freshness score (healthy/moderate/oversaturated). Use to assess whether a neighborhood has too much unsold/unrented inventory. When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
         inputSchema: {
           city: z.enum(CITY_ENUM).optional().default("riyadh"),
           listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
@@ -630,7 +766,7 @@ export class MyMCP extends McpAgent<Env> {
       "get_neighborhood_rent_map",
       {
         description:
-          "Get median rent and listing count for every neighborhood in a city. Returns all neighborhoods sorted by median price descending. Use for city-wide rent comparisons and finding cheapest/most expensive areas.",
+          "Get median price and listing count for every neighborhood in a city, sorted by median price descending. Works for both rent and sale listings (set listing_type). Use for city-wide price comparisons, finding the cheapest/most expensive neighborhoods, or ranking all neighborhoods by price.",
         inputSchema: {
           city: z.enum(CITY_ENUM).optional().default("riyadh"),
           listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
@@ -659,10 +795,16 @@ export class MyMCP extends McpAgent<Env> {
       "get_market_summary",
       {
         description:
-          "Get a high-level market overview for a city: total listings, median price, breakdown by property type, top neighborhoods, source coverage, data freshness, and YoY median price change.",
+          "Get a high-level market overview for a city: total listings, median price, median area, median price/sqm, breakdown by property type, top 10 neighborhoods by listing count, source coverage, data freshness, and YoY median price change. Use as the starting point for broad market questions.",
         inputSchema: {
           city: z.enum(CITY_ENUM).optional().default("riyadh"),
           listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
+          property_type: z
+            .enum(PROPERTY_TYPE_ENUM)
+            .optional()
+            .describe(
+              "Filter to a specific property type, or omit for city-wide overview",
+            ),
         },
         annotations: READ_ONLY,
       },
@@ -673,6 +815,7 @@ export class MyMCP extends McpAgent<Env> {
             buildUrl("/api/market-summary", {
               city: params.city,
               listing_type: params.listing_type,
+              property_type: params.property_type,
             }),
           ),
           params,
@@ -723,7 +866,7 @@ export class MyMCP extends McpAgent<Env> {
       "list_neighborhoods",
       {
         description:
-          "List all neighborhoods in a city with Arabic and English names.",
+          "List all neighborhoods in a city. Returns name in Arabic and English, plus a price_tier (1=cheapest quartile to 4=most expensive). Use this to get exact neighborhood names before calling other tools that filter by neighborhood. Also useful when a user asks 'which neighborhoods are affordable?' -- check the price_tier.",
         inputSchema: { city: z.enum(CITY_ENUM).optional().default("riyadh") },
         annotations: READ_ONLY,
       },
@@ -739,7 +882,7 @@ export class MyMCP extends McpAgent<Env> {
       "list_city_directions",
       {
         description:
-          "Get districts/directions of a city with their neighborhoods. Note: data from external API, may be slower.",
+          "Get geographic regions of a city (north, south, east, west, center) with their neighborhoods. Use when a user asks about a broad area like 'north Riyadh' or 'eastern Jeddah' to find which neighborhoods are in that direction, then pass those neighborhoods to other tools.",
         inputSchema: { city: z.enum(CITY_ENUM).optional().default("riyadh") },
         annotations: READ_ONLY,
       },
