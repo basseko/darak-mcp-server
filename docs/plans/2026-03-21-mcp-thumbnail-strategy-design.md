@@ -54,11 +54,11 @@ Claude uses `<img src="${listing.thumbnail_b64}">` in widget code.
 ### Size budget
 
 | Listings | Avg base64 size | Total added |
-|----------|----------------|-------------|
-| 1        | ~47KB          | ~47KB       |
-| 12       | ~47KB          | ~560KB      |
-| 30       | ~47KB          | ~1.4MB      |
-| 49       | ~47KB          | ~2.3MB      |
+| -------- | --------------- | ----------- |
+| 1        | ~47KB           | ~47KB       |
+| 12       | ~47KB           | ~560KB      |
+| 30       | ~47KB           | ~1.4MB      |
+| 49       | ~47KB           | ~2.3MB      |
 
 Default 12 keeps responses under 600KB of image data.
 

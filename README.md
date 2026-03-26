@@ -7,32 +7,35 @@ Remote MCP server for Saudi real estate data. Gives AI assistants access to 65,0
 ## Tools (16, all read-only)
 
 ### Search & Listings
-| Tool | Description |
-|------|-------------|
-| `search_listings` | Search with 20+ filters (city, price, beds, neighborhood, amenities, etc.) |
-| `get_listing` | Full details for a specific listing |
-| `get_comparable_listings` | Similar nearby listings for price comparison |
-| `get_price_history` | Price changes over time for a listing |
-| `get_best_value_listings` | Listings priced below neighborhood median |
+
+| Tool                      | Description                                                                |
+| ------------------------- | -------------------------------------------------------------------------- |
+| `search_listings`         | Search with 20+ filters (city, price, beds, neighborhood, amenities, etc.) |
+| `get_listing`             | Full details for a specific listing                                        |
+| `get_comparable_listings` | Similar nearby listings for price comparison                               |
+| `get_price_history`       | Price changes over time for a listing                                      |
+| `get_best_value_listings` | Listings priced below neighborhood median                                  |
 
 ### Market Analytics
-| Tool | Description |
-|------|-------------|
-| `get_price_distribution` | Price histogram with median and mean |
-| `get_area_distribution` | Area (sqm) histogram with median and mean |
+
+| Tool                       | Description                                                   |
+| -------------------------- | ------------------------------------------------------------- |
+| `get_price_distribution`   | Price histogram with median and mean                          |
+| `get_area_distribution`    | Area (sqm) histogram with median and mean                     |
 | `get_listing_market_stats` | Price/area percentiles and neighborhood context for a listing |
-| `compare_neighborhoods` | Side-by-side comparison of 2-5 neighborhoods |
-| `get_market_summary` | City-level overview: totals, medians, top neighborhoods |
-| `get_neighborhood_trends` | Monthly price trends with P25/P75 range |
+| `compare_neighborhoods`    | Side-by-side comparison of 2-5 neighborhoods                  |
+| `get_market_summary`       | City-level overview: totals, medians, top neighborhoods       |
+| `get_neighborhood_trends`  | Monthly price trends with P25/P75 range                       |
 
 ### Geography
-| Tool | Description |
-|------|-------------|
-| `list_neighborhoods` | All neighborhoods in a city (Arabic + English names) |
-| `list_city_directions` | City districts with their neighborhoods |
-| `get_neighborhood_pois` | Points of interest near a neighborhood |
-| `get_map_listings` | Listings within geographic bounds |
-| `get_map_pois` | Points of interest within geographic bounds |
+
+| Tool                    | Description                                          |
+| ----------------------- | ---------------------------------------------------- |
+| `list_neighborhoods`    | All neighborhoods in a city (Arabic + English names) |
+| `list_city_directions`  | City districts with their neighborhoods              |
+| `get_neighborhood_pois` | Points of interest near a neighborhood               |
+| `get_map_listings`      | Listings within geographic bounds                    |
+| `get_map_pois`          | Points of interest within geographic bounds          |
 
 ## Cities
 
