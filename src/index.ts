@@ -14,6 +14,19 @@ const CITY_ENUM = [
   "madinah",
 ] as const;
 
+const PROPERTY_TYPE_ENUM = [
+  "apartment",
+  "villa",
+  "land",
+  "building",
+  "office",
+  "shop",
+  "warehouse",
+  "floor",
+  "duplex",
+  "all",
+] as const;
+
 const CITY_SLUG_TO_NAME: Record<string, string> = {
   riyadh: "Riyadh",
   jeddah: "Jeddah",
@@ -164,7 +177,7 @@ export class MyMCP extends McpAgent<Env> {
       inputSchema: {
         city: z.enum(CITY_ENUM).optional().default("riyadh").describe("City to search"),
         listing_type: z.enum(["rent", "sale"]).optional().default("rent").describe("Rent or sale"),
-        property_type: z.enum(["apartment", "villa", "all"]).optional().describe("Property type ('all' = no filter)"),
+        property_type: z.enum(PROPERTY_TYPE_ENUM).optional().describe("Property type: apartment, villa, land, building, office, shop, warehouse, floor, duplex, or 'all' for no filter"),
         price_min: z.number().optional().describe("Minimum price in SAR"),
         price_max: z.number().optional().describe("Maximum price in SAR"),
         beds: z.number().optional().describe("Minimum number of bedrooms"),
@@ -233,7 +246,7 @@ export class MyMCP extends McpAgent<Env> {
       inputSchema: {
         city: z.enum(CITY_ENUM).optional().default("riyadh"),
         listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
-        property_type: z.enum(["apartment", "villa", "all"]).optional(),
+        property_type: z.enum(PROPERTY_TYPE_ENUM).optional(),
         neighborhood: z.string().optional().describe("Neighborhood name(s), comma-separated"),
         beds: z.number().optional().describe("Minimum bedrooms"),
         limit: z.number().optional().default(30).describe("Max results (max 100)"),
@@ -253,7 +266,7 @@ export class MyMCP extends McpAgent<Env> {
       inputSchema: {
         city: z.enum(CITY_ENUM).optional().default("riyadh"),
         listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
-        property_type: z.enum(["apartment", "villa", "all"]).optional(),
+        property_type: z.enum(PROPERTY_TYPE_ENUM).optional(),
         neighborhood: z.string().optional().describe("Neighborhood name(s), comma-separated"),
       },
       annotations: READ_ONLY,
@@ -267,7 +280,7 @@ export class MyMCP extends McpAgent<Env> {
       inputSchema: {
         city: z.enum(CITY_ENUM).optional().default("riyadh"),
         listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
-        property_type: z.enum(["apartment", "villa", "all"]).optional(),
+        property_type: z.enum(PROPERTY_TYPE_ENUM).optional(),
         neighborhood: z.string().optional().describe("Neighborhood name(s), comma-separated"),
       },
       annotations: READ_ONLY,
@@ -288,7 +301,7 @@ export class MyMCP extends McpAgent<Env> {
         city: z.enum(CITY_ENUM).optional().default("riyadh"),
         neighborhoods: z.string().describe("2-5 neighborhood English names, comma-separated. Use list_neighborhoods to get valid names."),
         listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
-        property_type: z.enum(["apartment", "villa", "all"]).optional(),
+        property_type: z.enum(PROPERTY_TYPE_ENUM).optional(),
       },
       annotations: READ_ONLY,
     }, async (params) => result("compare_neighborhoods", await callApi(buildUrl("/api/neighborhood-compare", {
@@ -313,7 +326,7 @@ export class MyMCP extends McpAgent<Env> {
         city: z.enum(CITY_ENUM).optional().default("riyadh"),
         neighborhoods: z.string().describe("1-5 neighborhood English names, comma-separated. Use list_neighborhoods to get valid names."),
         listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
-        property_type: z.enum(["apartment", "villa", "all"]).optional(),
+        property_type: z.enum(PROPERTY_TYPE_ENUM).optional(),
         months: z.number().optional().default(6).describe("How many months of history (max 24)"),
       },
       annotations: READ_ONLY,
@@ -354,7 +367,7 @@ export class MyMCP extends McpAgent<Env> {
         bounds: z.string().describe("Bounding box as 'south,west,north,east' coordinates"),
         zoom: z.number().optional().default(12).describe("Map zoom level"),
         listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
-        property_type: z.enum(["apartment", "villa", "all"]).optional(),
+        property_type: z.enum(PROPERTY_TYPE_ENUM).optional(),
         city: z.enum(CITY_ENUM).optional().default("riyadh"),
         sort: z.enum(["relevance", "price_asc", "price_desc", "area_desc", "newest"]).optional(),
       },
