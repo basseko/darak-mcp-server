@@ -23,7 +23,7 @@
     ],
   },
   "vars": {
-    "POSTHOG_PROJECT_TOKEN": "",
+    "POSTHOG_PROJECT_TOKEN": "phc_6DKKUjceEzIMd8MkFjmlGyDBZAeB4h5UgM1OweSCvDB",
   },
   "observability": {
     "enabled": true,
