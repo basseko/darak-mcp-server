@@ -548,7 +548,7 @@ export class MyMCP extends McpAgent<Env> {
       "get_price_distribution",
       {
         description:
-          "Get price distribution histogram for a market segment. Returns 30 buckets with counts, median, mean, and cumulative percentiles (e.g. '72% of listings are under 50K'). Does NOT filter by bedroom count -- shows distribution across all bedrooms for the given filters. When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
+          "Get price distribution histogram for a market segment. Returns 30 buckets with counts, median, mean, and cumulative percentiles (e.g. '72% of listings are under 50K'). Supports optional bedroom filter to get distribution for a specific bedroom count (e.g. median 1BR rent in Al Yasmin). When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
         inputSchema: {
           city: z.enum(CITY_ENUM).optional().default("riyadh"),
           listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
@@ -564,6 +564,15 @@ export class MyMCP extends McpAgent<Env> {
             .string()
             .optional()
             .describe("Neighborhood name(s), comma-separated"),
+          beds: z
+            .number()
+            .int()
+            .min(1)
+            .max(5)
+            .optional()
+            .describe(
+              "Filter by bedroom count. 1-4 = exact match, 5 = 5+ bedrooms.",
+            ),
         },
         annotations: READ_ONLY,
       },
@@ -577,6 +586,7 @@ export class MyMCP extends McpAgent<Env> {
               listing_category: params.listing_category,
               property_type: params.property_type,
               neighborhood: params.neighborhood,
+              beds: params.beds,
             }),
           ),
           params,
