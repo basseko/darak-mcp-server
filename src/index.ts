@@ -266,6 +266,12 @@ export class MyMCP extends McpAgent<Env> {
             .string()
             .optional()
             .describe("Filter by compound/community name (partial match)"),
+          q: z
+            .string()
+            .optional()
+            .describe(
+              'Search listing descriptions and titles. Supports: words (AND by default), quoted "phrases" for exact match, and | for OR. Examples: \'pool garden\' matches both words. \'"سكن طالبات" | "سكن موظفات"\' matches either phrase. \'"near metro"\' matches exact phrase.',
+            ),
           livings: z
             .number()
             .optional()
@@ -336,6 +342,7 @@ export class MyMCP extends McpAgent<Env> {
               verified: params.verified,
               advertiser_type: params.advertiser_type,
               compound: params.compound,
+              q: params.q,
               livings: params.livings,
               min_days_on_market: params.min_days_on_market,
               max_days_on_market: params.max_days_on_market,
