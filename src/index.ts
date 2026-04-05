@@ -1004,6 +1004,288 @@ export class MyMCP extends McpAgent<Env> {
           await callApi(buildUrl("/api/map-pois", { bounds, zoom })),
         ),
     );
+
+    // --- Projects (Off-Plan & Ready) ---
+
+    this.server.registerTool(
+      "search_projects",
+      {
+        description:
+          "Search off-plan and ready real estate development projects in Saudi Arabia. Returns paginated projects with name, developer, city, neighborhood, starting price, price range, area range, unit count, bedroom range, images, and status. Use for questions about new developments, off-plan projects, or specific developers. IMPORTANT: When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
+        inputSchema: {
+          city: z
+            .enum(CITY_ENUM)
+            .optional()
+            .default("riyadh")
+            .describe("City to search"),
+          type: z
+            .enum(["off_plan", "ready", "all"])
+            .optional()
+            .describe(
+              "Project type: 'off_plan' for under-construction, 'ready' for completed, or 'all'",
+            ),
+          category: z
+            .enum(["residential", "commercial", "all"])
+            .optional()
+            .default("residential")
+            .describe("Property category"),
+          developer: z
+            .string()
+            .optional()
+            .describe(
+              "Developer name (exact match). Use list_developers to get valid names.",
+            ),
+          neighborhood: z
+            .string()
+            .optional()
+            .describe(
+              "Neighborhood name(s), comma-separated. Use list_neighborhoods to get valid names.",
+            ),
+          features: z
+            .string()
+            .optional()
+            .describe(
+              "Comma-separated project features to require (e.g. pool, gym, parking, mosque, playground)",
+            ),
+          banks: z
+            .string()
+            .optional()
+            .describe(
+              "Comma-separated supported bank names for mortgage financing",
+            ),
+          price_min: z
+            .number()
+            .optional()
+            .describe("Minimum project starting price in SAR"),
+          price_max: z
+            .number()
+            .optional()
+            .describe("Maximum project starting price in SAR"),
+          unit_beds: z
+            .number()
+            .optional()
+            .describe(
+              "Filter to projects that have units with this bedroom count",
+            ),
+          unit_price_min: z
+            .number()
+            .optional()
+            .describe("Minimum unit price in SAR"),
+          unit_price_max: z
+            .number()
+            .optional()
+            .describe("Maximum unit price in SAR"),
+          unit_area_min: z
+            .number()
+            .optional()
+            .describe("Minimum unit area in sqm"),
+          unit_area_max: z
+            .number()
+            .optional()
+            .describe("Maximum unit area in sqm"),
+          q: z
+            .string()
+            .optional()
+            .describe(
+              "Search project name or developer name (partial match)",
+            ),
+          sort: z
+            .enum(["newest", "price_asc", "price_desc"])
+            .optional()
+            .default("newest")
+            .describe("Sort order"),
+          page: z.number().optional().default(1).describe("Page number"),
+          limit: z
+            .number()
+            .optional()
+            .default(30)
+            .describe("Results per page (max 100)"),
+        },
+        annotations: READ_ONLY,
+      },
+      async (params) => {
+        return result(
+          "search_projects",
+          await callApi(
+            buildUrl("/api/projects", {
+              city: params.city,
+              type: params.type,
+              category: params.category,
+              developer: params.developer,
+              neighborhood: params.neighborhood,
+              features: params.features,
+              banks: params.banks,
+              price_min: params.price_min,
+              price_max: params.price_max,
+              unit_beds: params.unit_beds,
+              unit_price_min: params.unit_price_min,
+              unit_price_max: params.unit_price_max,
+              unit_area_min: params.unit_area_min,
+              unit_area_max: params.unit_area_max,
+              q: params.q,
+              sort: params.sort,
+              page: params.page,
+              limit: params.limit,
+            }),
+          ),
+          params,
+        );
+      },
+    );
+
+    this.server.registerTool(
+      "get_project",
+      {
+        description:
+          "Get full details for a specific development project by ID. Returns all project fields (name, developer, city, neighborhood, status, type, starting price, price range, area range, features, supported banks, images, coordinates, polygon) plus all its unit listings with price, bedrooms, bathrooms, area, and floor.",
+        inputSchema: { id: z.number().describe("Project ID") },
+        annotations: READ_ONLY,
+      },
+      async ({ id }) =>
+        result(
+          "get_project",
+          await callApi(buildUrl(`/api/projects/${id}`)),
+        ),
+    );
+
+    this.server.registerTool(
+      "list_developers",
+      {
+        description:
+          "List all real estate developers with active projects in a city. Returns an array of developer names. Use this to get valid developer names before filtering search_projects by developer.",
+        inputSchema: {
+          city: z
+            .enum(CITY_ENUM)
+            .optional()
+            .default("riyadh")
+            .describe("City to list developers for"),
+        },
+        annotations: READ_ONLY,
+      },
+      async ({ city }) =>
+        result(
+          "list_developers",
+          await callApi(buildUrl("/api/projects/developers", { city })),
+          { city },
+        ),
+    );
+
+    this.server.registerTool(
+      "search_project_units",
+      {
+        description:
+          "Search individual units within development projects. Returns paginated unit listings with price, bedrooms, bathrooms, area, floor, property type, project name, and neighborhood. Use when the user wants to find specific unit types across projects (e.g. '3BR units under 1.5M in off-plan projects'). IMPORTANT: When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
+        inputSchema: {
+          city: z
+            .enum(CITY_ENUM)
+            .describe("City to search (required)"),
+          unit_beds: z
+            .number()
+            .optional()
+            .describe(
+              "Number of bedrooms (exact match for 1-4, minimum for 5+)",
+            ),
+          unit_bathrooms: z
+            .number()
+            .optional()
+            .describe(
+              "Number of bathrooms (exact match for 1-2, minimum for 3+)",
+            ),
+          unit_price_min: z
+            .number()
+            .optional()
+            .describe("Minimum unit price in SAR"),
+          unit_price_max: z
+            .number()
+            .optional()
+            .describe("Maximum unit price in SAR"),
+          unit_area_min: z
+            .number()
+            .optional()
+            .describe("Minimum unit area in sqm"),
+          unit_area_max: z
+            .number()
+            .optional()
+            .describe("Maximum unit area in sqm"),
+          neighborhood: z
+            .string()
+            .optional()
+            .describe(
+              "Neighborhood name(s), comma-separated. Use list_neighborhoods to get valid names.",
+            ),
+          type: z
+            .enum(["off_plan", "ready", "all"])
+            .optional()
+            .describe("Project type filter"),
+          developer: z
+            .string()
+            .optional()
+            .describe(
+              "Developer name (exact match). Use list_developers to get valid names.",
+            ),
+          features: z
+            .string()
+            .optional()
+            .describe("Comma-separated project features to require"),
+          banks: z
+            .string()
+            .optional()
+            .describe("Comma-separated supported bank names"),
+          price_min: z
+            .number()
+            .optional()
+            .describe("Minimum project starting price in SAR"),
+          price_max: z
+            .number()
+            .optional()
+            .describe("Maximum project starting price in SAR"),
+          q: z
+            .string()
+            .optional()
+            .describe("Search project name or developer name"),
+          sort: z
+            .enum(["newest", "price_asc", "price_desc", "area_desc", "bedrooms_desc"])
+            .optional()
+            .default("newest")
+            .describe("Sort order"),
+          page: z.number().optional().default(1).describe("Page number"),
+          limit: z
+            .number()
+            .optional()
+            .default(30)
+            .describe("Results per page (max 100)"),
+        },
+        annotations: READ_ONLY,
+      },
+      async (params) => {
+        return result(
+          "search_project_units",
+          await callApi(
+            buildUrl("/api/projects/units", {
+              city: params.city,
+              unit_beds: params.unit_beds,
+              unit_bathrooms: params.unit_bathrooms,
+              unit_price_min: params.unit_price_min,
+              unit_price_max: params.unit_price_max,
+              unit_area_min: params.unit_area_min,
+              unit_area_max: params.unit_area_max,
+              neighborhood: params.neighborhood,
+              type: params.type,
+              developer: params.developer,
+              features: params.features,
+              banks: params.banks,
+              price_min: params.price_min,
+              price_max: params.price_max,
+              q: params.q,
+              sort: params.sort,
+              page: params.page,
+              limit: params.limit,
+            }),
+          ),
+          params,
+        );
+      },
+    );
   }
 }
 
