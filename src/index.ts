@@ -9,8 +9,15 @@ import { z } from "zod";
 // rollup and dashboards as any other API consumer.
 const DEFAULT_API_BASE = "https://api.darak.app/v1";
 
-/** Where a client goes to sign in; this server only consumes the result. */
-const AUTHORIZATION_SERVER = "https://platform.darak.app/api/auth";
+/**
+ * Where a client goes to sign in; this server only consumes the result.
+ *
+ * It must be the issuer exactly as the discovery document states it
+ * (RFC 8414 §3.3), not the path the endpoints happen to live under: a client
+ * fetches `<issuer>/.well-known/oauth-authorization-server` and rejects the
+ * result if the `issuer` inside does not match what it asked for.
+ */
+const AUTHORIZATION_SERVER = "https://darak.app";
 
 /** The token from `Authorization: Bearer <token>`, or "" when absent. */
 function bearerFrom(header: string | null): string {
