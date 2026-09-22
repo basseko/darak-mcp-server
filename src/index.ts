@@ -4,7 +4,10 @@ import { z } from "zod";
 
 // --- Helpers ---
 
-const API_BASE = "https://darak.app";
+// The public, versioned, metered API — not darak.app's internal routes. Every
+// call carries a key, so MCP traffic lands in the same request log, usage
+// rollup and dashboards as any other API consumer.
+const DEFAULT_API_BASE = "https://api.darak.app/v1";
 
 const CITY_ENUM = ["riyadh", "jeddah", "eastern_province", "makkah", "madinah"] as const;
 
@@ -24,8 +27,11 @@ const PROPERTY_TYPE_ENUM = [
 function buildUrl(
 	path: string,
 	params?: Record<string, string | number | boolean | undefined>,
+	base: string = DEFAULT_API_BASE,
 ): string {
-	const url = new URL(path, API_BASE);
+	// Concatenated, not `new URL(path, base)`: the base carries the `/v1` prefix
+	// and a root-relative path would replace it rather than extend it.
+	const url = new URL(`${base.replace(/\/$/, "")}${path}`);
 	if (params) {
 		for (const [key, value] of Object.entries(params)) {
 			if (value !== undefined && value !== "") {
@@ -36,9 +42,11 @@ function buildUrl(
 	return url.toString();
 }
 
-async function callApi(url: string): Promise<unknown> {
+async function callApi(url: string, apiKey?: string): Promise<unknown> {
 	try {
-		const res = await fetch(url);
+		const res = await fetch(url, {
+			headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+		});
 		if (!res.ok) {
 			const text = await res.text();
 			console.error(
@@ -49,6 +57,15 @@ async function callApi(url: string): Promise<unknown> {
 					body: text.slice(0, 500),
 				}),
 			);
+			// v1 already answers with { error: { type, code, message, ... } }, which
+			// is the shape the tool result checks for. Pass it through so the model
+			// reads "monthly quota exceeded" rather than a stringified blob.
+			try {
+				const body = JSON.parse(text) as { error?: unknown };
+				if (body && typeof body === "object" && body.error) return body;
+			} catch {
+				// Not JSON — fall through to the generic message.
+			}
 			return { error: `API returned ${res.status}: ${text}` };
 		}
 		return res.json();
@@ -197,6 +214,13 @@ export class MyMCP extends McpAgent<Env> {
 				(this.props ?? {}) as Partial<CallerProps>,
 				this.server.server.getClientVersion(),
 			);
+
+		// Every tool reaches the API through here, so the base URL and the key are
+		// decided in one place rather than at 26 call sites.
+		const api = (
+			path: string,
+			params?: Record<string, string | number | boolean | undefined>,
+		) => callApi(buildUrl(path, params, this.env.DARAK_API_BASE), this.env.DARAK_API_KEY);
 
 		// --- Search & Listings ---
 

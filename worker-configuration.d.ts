@@ -10,6 +10,9 @@ declare namespace Cloudflare {
 		POSTHOG_PROJECT_TOKEN: "";
 		MCP_IP_SALT: string;
 		POSTHOG_HOST: string;
+		DARAK_API_BASE: string;
+		/** Secret: `wrangler secret put DARAK_API_KEY`. Not in wrangler.jsonc. */
+		DARAK_API_KEY: string;
 		MCP_OBJECT: DurableObjectNamespace<import("./src/index").MyMCP>;
 	}
 }

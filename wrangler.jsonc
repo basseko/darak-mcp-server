@@ -28,6 +28,9 @@
 		"MCP_IP_SALT": "darak-mcp-2026-09",
 		// Overridable so `wrangler dev` can post usage events to a local sink.
 		"POSTHOG_HOST": "https://us.i.posthog.com",
+		// The public metered API. Override to a preview deployment or
+		// http://localhost:3000/api/v1 when developing against a local app.
+		"DARAK_API_BASE": "https://api.darak.app/v1",
 	},
 	"observability": {
 		"enabled": true,
