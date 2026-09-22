@@ -3,35 +3,38 @@
  * https://developers.cloudflare.com/workers/wrangler/configuration/
  */
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "darak-mcp-server",
-  "main": "src/index.ts",
-  "compatibility_date": "2026-03-26",
-  "compatibility_flags": ["nodejs_compat"],
-  "migrations": [
-    {
-      "new_sqlite_classes": ["MyMCP"],
-      "tag": "v1",
-    },
-  ],
-  "durable_objects": {
-    "bindings": [
-      {
-        "class_name": "MyMCP",
-        "name": "MCP_OBJECT",
-      },
-    ],
-  },
-  "vars": {
-    "POSTHOG_PROJECT_TOKEN": "phc_6DKKUjceEzIMd8MkFjmlGyDBZAeB4h5UgM1OweSCvDB",
-    // Salt for hashing caller IPs in usage events; rotating it resets the ids.
-    "MCP_IP_SALT": "darak-mcp-2026-09",
-    // Overridable so `wrangler dev` can post usage events to a local sink.
-    "POSTHOG_HOST": "https://us.i.posthog.com",
-  },
-  "observability": {
-    "enabled": true,
-    "logs": { "head_sampling_rate": 1 },
-    "traces": { "enabled": true, "head_sampling_rate": 0.1 },
-  },
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "darak-mcp-server",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-03-26",
+	"compatibility_flags": ["nodejs_compat"],
+	"migrations": [
+		{
+			"new_sqlite_classes": ["MyMCP"],
+			"tag": "v1",
+		},
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"class_name": "MyMCP",
+				"name": "MCP_OBJECT",
+			},
+		],
+	},
+	"vars": {
+		"POSTHOG_PROJECT_TOKEN": "phc_6DKKUjceEzIMd8MkFjmlGyDBZAeB4h5UgM1OweSCvDB",
+		// Salt for hashing caller IPs in usage events; rotating it resets the ids.
+		"MCP_IP_SALT": "darak-mcp-2026-09",
+		// Overridable so `wrangler dev` can post usage events to a local sink.
+		"POSTHOG_HOST": "https://us.i.posthog.com",
+		// The public metered API. Override to a preview deployment or
+		// http://localhost:3000/api/v1 when developing against a local app.
+		"DARAK_API_BASE": "https://api.darak.app/v1",
+	},
+	"observability": {
+		"enabled": true,
+		"logs": { "head_sampling_rate": 1 },
+		"traces": { "enabled": true, "head_sampling_rate": 0.1 },
+	},
 }
