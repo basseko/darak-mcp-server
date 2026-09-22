@@ -76,27 +76,6 @@ async function callApi(url: string, apiKey?: string): Promise<unknown> {
 	}
 }
 
-/** Replace source_url with darak.app listing URL on any object with an `id` field */
-function rewriteUrls(data: unknown): unknown {
-	if (!data || typeof data !== "object") return data;
-	if (Array.isArray(data)) return data.map(rewriteUrls);
-
-	const obj = data as Record<string, unknown>;
-
-	// Single listing object — has numeric id
-	if (typeof obj.id === "number") {
-		const { source_url: _, ...rest } = obj;
-		return { ...rest, url: `https://darak.app/listing/${obj.id}` };
-	}
-
-	// Paginated response — rewrite nested arrays (listings, comparables, etc.)
-	const rewritten: Record<string, unknown> = {};
-	for (const [key, value] of Object.entries(obj)) {
-		rewritten[key] = Array.isArray(value) ? value.map(rewriteUrls) : value;
-	}
-	return rewritten;
-}
-
 /**
  * Who is calling, as far as an anonymous server can tell: a salted hash of the
  * IP (stable per caller, never an address), the MCP client's name, and the
@@ -179,18 +158,31 @@ function textResult(
 	caller: Partial<CallerProps>,
 	client: { name?: string; version?: string } | undefined,
 ) {
-	const rewritten = rewriteUrls(data);
-	const isError = !!(rewritten && typeof rewritten === "object" && "error" in rewritten);
-	trackToolCall(toolName, params, isError, ctx, env, caller, client, countResults(rewritten));
+	// v1 already serialises `url` as the darak.app listing page and nests the
+	// source ad under `source.url`, so the payload is passed through as-is.
+	const isError = !!(data && typeof data === "object" && "error" in data);
+	trackToolCall(toolName, params, isError, ctx, env, caller, client, countResults(data));
 	if (isError) {
 		return {
-			content: [{ type: "text" as const, text: JSON.stringify(rewritten, null, 2) }],
+			content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
 			isError: true,
 		};
 	}
 	return {
-		content: [{ type: "text" as const, text: JSON.stringify(rewritten, null, 2) }],
+		content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
 	};
+}
+
+/** The API has no "all" — the filter is simply absent. */
+function concrete(propertyType?: string): string | undefined {
+	return propertyType && propertyType !== "all" ? propertyType : undefined;
+}
+
+/** The site thinks in windows ("updated in the last week"), the API in instants. */
+function sinceFrom(window?: "3d" | "1w" | "1m"): string | undefined {
+	if (!window) return undefined;
+	const days = window === "3d" ? 3 : window === "1w" ? 7 : 30;
+	return new Date(Date.now() - days * 86_400_000).toISOString();
 }
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false } as const;
@@ -228,7 +220,7 @@ export class MyMCP extends McpAgent<Env> {
 			"search_listings",
 			{
 				description:
-					"Search Saudi rental or sale property listings with filters. Returns paginated results with full listing details (price, beds, area, neighborhood, images, URL). Prices are in SAR. For commercial properties (office, shop, warehouse), set listing_category to 'commercial'. IMPORTANT: When filtering by neighborhood, you MUST first call list_neighborhoods to get the exact English name. Do not guess neighborhood names.",
+					"Search Saudi rental or sale property listings with filters. Returns paginated results with full listing details (price, beds, area, neighborhood, images, URL). Prices are in SAR. For commercial properties (office, shop, warehouse), set listing_category to 'commercial'. IMPORTANT: When filtering by neighborhood, you MUST first call list_neighborhoods to get its id. Do not guess ids.",
 				inputSchema: {
 					city: z.enum(CITY_ENUM).optional().default("riyadh").describe("City to search"),
 					listing_type: z
@@ -251,22 +243,19 @@ export class MyMCP extends McpAgent<Env> {
 						),
 					price_min: z.number().optional().describe("Minimum price in SAR"),
 					price_max: z.number().optional().describe("Maximum price in SAR"),
-					beds: z
-						.number()
-						.optional()
-						.describe("Number of bedrooms (exact match for 1-4, minimum for 5+)"),
-					neighborhood: z
+					beds: z.number().optional().describe("Exact number of bedrooms (0 = studio)"),
+					beds_min: z.number().optional().describe("Minimum bedrooms, e.g. 5 for '5+'"),
+					beds_max: z.number().optional().describe("Maximum bedrooms"),
+					neighborhood_id: z
 						.string()
 						.optional()
 						.describe(
-							"Neighborhood name(s), comma-separated. Use list_neighborhoods to get valid names.",
+							"Neighborhood id(s), comma-separated. Call list_neighborhoods first to get ids.",
 						),
-					neighborhood_exclude: z
+					neighborhood_id_exclude: z
 						.string()
 						.optional()
-						.describe(
-							"Exclude these neighborhoods, comma-separated. Use list_neighborhoods to get valid names.",
-						),
+						.describe("Exclude these neighborhood ids, comma-separated."),
 					amenities: z
 						.string()
 						.optional()
@@ -282,10 +271,11 @@ export class MyMCP extends McpAgent<Env> {
 					furnished: z.boolean().optional().describe("Filter by furnished status"),
 					area_min: z.number().optional().describe("Minimum area in sqm"),
 					area_max: z.number().optional().describe("Maximum area in sqm"),
-					bathrooms: z
+					bathrooms: z.number().optional().describe("Exact number of bathrooms"),
+					bathrooms_min: z
 						.number()
 						.optional()
-						.describe("Number of bathrooms (exact match for 1-3, minimum for 4+)"),
+						.describe("Minimum bathrooms, e.g. 4 for '4+'"),
 					floor: z.enum(["ground", "upper"]).optional().describe("Floor preference"),
 					source: z.string().optional().describe("Data source name(s), comma-separated"),
 					source_exclude: z
@@ -299,9 +289,11 @@ export class MyMCP extends McpAgent<Env> {
 						.describe("Only listings updated within this period"),
 					verified: z.boolean().optional().describe("Filter by verified listings only"),
 					advertiser_type: z
-						.enum(["owner", "agent", "developer"])
+						.enum(["company", "individual"])
 						.optional()
-						.describe("Filter by advertiser type"),
+						.describe(
+							"Who posted the ad. Listings by an intermediary who does not say whether they are a firm or a person match neither.",
+						),
 					compound: z
 						.string()
 						.optional()
@@ -312,82 +304,79 @@ export class MyMCP extends McpAgent<Env> {
 						.describe(
 							'Search listing descriptions and titles. Supports: words (AND by default), quoted "phrases" for exact match, and | for OR. Examples: \'pool garden\' matches both words. \'"سكن طالبات" | "سكن موظفات"\' matches either phrase. \'"near metro"\' matches exact phrase.',
 						),
-					livings: z.number().optional().describe("Minimum number of living rooms"),
-					min_days_on_market: z
+					livings_min: z.number().optional().describe("Minimum number of living rooms"),
+					days_on_market_min: z
 						.number()
 						.optional()
 						.describe("Only listings on market for at least N days"),
-					max_days_on_market: z
+					days_on_market_max: z
 						.number()
 						.optional()
 						.describe("Only listings on market for at most N days"),
 					sort: z
 						.enum([
-							"relevance",
+							"recommended",
+							"newest",
+							"updated_desc",
+							"updated_asc",
 							"price_asc",
 							"price_desc",
-							"area_desc",
-							"newest",
-							"price_per_sqm_asc",
-							"price_per_sqm_desc",
-							"best_value",
-							"bedrooms_desc",
-							"oldest_listing",
-							"recently_updated",
 							"price_drop",
 							"days_on_market_desc",
 						])
 						.optional()
-						.default("relevance")
+						.default("recommended")
 						.describe(
-							"Sort order. Use 'price_drop' to find listings that recently reduced their price.",
+							"Sort order. 'recommended' is Darak's own ranking and the right default for answering a question; 'price_drop' finds listings that recently reduced their price.",
 						),
-					page: z.number().optional().default(1).describe("Page number"),
-					page_size: z
-						.number()
+					cursor: z
+						.string()
 						.optional()
-						.default(30)
-						.describe("Results per page (max 100)"),
+						.describe(
+							"next_cursor from a previous response, to get the following page.",
+						),
+					limit: z.number().optional().default(30).describe("Results per page (max 100)"),
 				},
 				annotations: READ_ONLY,
 			},
 			async (params) => {
 				return result(
 					"search_listings",
-					await callApi(
-						buildUrl("/api/listings", {
-							city: params.city,
-							listing_type: params.listing_type,
-							listing_category: params.listing_category,
-							property_type: params.property_type,
-							price_min: params.price_min,
-							price_max: params.price_max,
-							beds: params.beds,
-							neighborhood: params.neighborhood,
-							neighborhood_exclude: params.neighborhood_exclude,
-							amenities: params.amenities,
-							amenities_exclude: params.amenities_exclude,
-							furnished: params.furnished,
-							area_min: params.area_min,
-							area_max: params.area_max,
-							bathrooms: params.bathrooms,
-							floor: params.floor,
-							source: params.source,
-							source_exclude: params.source_exclude,
-							max_age: params.max_age,
-							updated_within: params.updated_within,
-							verified: params.verified,
-							advertiser_type: params.advertiser_type,
-							compound: params.compound,
-							q: params.q,
-							livings: params.livings,
-							min_days_on_market: params.min_days_on_market,
-							max_days_on_market: params.max_days_on_market,
-							sort: params.sort,
-							page: params.page,
-							page_size: params.page_size,
-						}),
-					),
+					await api("/listings", {
+						city: params.city,
+						listing_type: params.listing_type,
+						listing_category: params.listing_category,
+						property_type: concrete(params.property_type),
+						price_min: params.price_min,
+						price_max: params.price_max,
+						beds: params.beds,
+						beds_min: params.beds_min,
+						beds_max: params.beds_max,
+						neighborhood_id: params.neighborhood_id,
+						neighborhood_id_exclude: params.neighborhood_id_exclude,
+						amenities: params.amenities,
+						amenities_exclude: params.amenities_exclude,
+						furnished: params.furnished,
+						area_min: params.area_min,
+						area_max: params.area_max,
+						bathrooms: params.bathrooms,
+						bathrooms_min: params.bathrooms_min,
+						floor: params.floor,
+						source: params.source,
+						source_exclude: params.source_exclude,
+						max_age: params.max_age,
+						updated_since: sinceFrom(params.updated_within),
+						verified: params.verified,
+						advertiser_type: params.advertiser_type,
+						compound: params.compound,
+						q: params.q,
+						livings_min: params.livings_min,
+						days_on_market_min: params.days_on_market_min,
+						days_on_market_max: params.days_on_market_max,
+						sort: params.sort,
+						cursor: params.cursor,
+						limit: params.limit,
+					}),
 					params,
 				);
 			},
@@ -397,7 +386,7 @@ export class MyMCP extends McpAgent<Env> {
 			"get_listings_by_ids",
 			{
 				description:
-					"Fetch full details for multiple listings by their IDs in one call (max 200). Use when comparing specific listings or looking up several listings the user referenced.",
+					"Fetch full details for multiple listings by their IDs in one call (max 100). Use when comparing specific listings or looking up several listings the user referenced.",
 				inputSchema: {
 					ids: z.string().describe("Comma-separated listing IDs (e.g. '12345,67890')"),
 				},
@@ -406,7 +395,7 @@ export class MyMCP extends McpAgent<Env> {
 			async (params) => {
 				return result(
 					"get_listings_by_ids",
-					await callApi(buildUrl("/api/listings/by-ids", { ids: params.ids })),
+					await api("/listings/batch", { ids: params.ids }),
 					params,
 				);
 			},
@@ -428,11 +417,11 @@ export class MyMCP extends McpAgent<Env> {
 							"Use 'commercial' for office, shop, warehouse. Default: 'residential'.",
 						),
 					property_type: z.enum(PROPERTY_TYPE_ENUM).optional(),
-					neighborhood: z
+					neighborhood_id: z
 						.string()
 						.optional()
 						.describe(
-							"Neighborhood name(s), comma-separated. Use list_neighborhoods to get valid names.",
+							"Neighborhood id(s), comma-separated. Call list_neighborhoods first to get ids.",
 						),
 					beds: z.number().optional().describe("Number of bedrooms"),
 					price_min: z.number().optional().describe("Minimum price in SAR"),
@@ -443,18 +432,16 @@ export class MyMCP extends McpAgent<Env> {
 			async (params) => {
 				return result(
 					"get_listings_count",
-					await callApi(
-						buildUrl("/api/listings/count", {
-							city: params.city,
-							listing_type: params.listing_type,
-							listing_category: params.listing_category,
-							property_type: params.property_type,
-							neighborhood: params.neighborhood,
-							beds: params.beds,
-							price_min: params.price_min,
-							price_max: params.price_max,
-						}),
-					),
+					await api("/listings/count", {
+						city: params.city,
+						listing_type: params.listing_type,
+						listing_category: params.listing_category,
+						property_type: concrete(params.property_type),
+						neighborhood_id: params.neighborhood_id,
+						beds: params.beds,
+						price_min: params.price_min,
+						price_max: params.price_max,
+					}),
 					params,
 				);
 			},
@@ -468,7 +455,7 @@ export class MyMCP extends McpAgent<Env> {
 				inputSchema: { id: z.number().describe("Listing ID") },
 				annotations: READ_ONLY,
 			},
-			async ({ id }) => result("get_listing", await callApi(buildUrl(`/api/listings/${id}`))),
+			async ({ id }) => result("get_listing", await api(`/listings/${id}`)),
 		);
 
 		this.server.registerTool(
@@ -478,19 +465,14 @@ export class MyMCP extends McpAgent<Env> {
 					"Find similar listings near a specific listing for direct price comparison. Returns up to N nearby listings (within ~5km) matching the same property type and similar bedroom count (+/-1), plus the median price across all comparables. Each comparable includes: id, price, bedrooms, area_sqm, neighborhood, source, and URL. Use get_listing first to get listing details, then this tool to see nearby alternatives at different prices.",
 				inputSchema: {
 					id: z.number().describe("Listing ID to find comparables for"),
-					limit: z.number().optional().default(50).describe("Max results (max 100)"),
+					limit: z.number().min(1).max(50).optional().default(20).describe("Max results"),
 				},
 				annotations: READ_ONLY,
 			},
 			async (params) => {
 				return result(
 					"get_comparable_listings",
-					await callApi(
-						buildUrl("/api/listing-comparables", {
-							id: params.id,
-							limit: params.limit,
-						}),
-					),
+					await api(`/listings/${params.id}/comparables`, { limit: params.limit }),
 					params,
 				);
 			},
@@ -503,31 +485,18 @@ export class MyMCP extends McpAgent<Env> {
 					"Get price change history for a listing. Shows how the price evolved over time, total price change percentage, and days on market.",
 				inputSchema: {
 					id: z.number().describe("Listing ID"),
-					limit: z
-						.number()
-						.optional()
-						.default(50)
-						.describe("Max history records (max 200)"),
 				},
 				annotations: READ_ONLY,
 			},
 			async (params) =>
-				result(
-					"get_price_history",
-					await callApi(
-						buildUrl("/api/price-history", {
-							id: params.id,
-							limit: params.limit,
-						}),
-					),
-				),
+				result("get_price_history", await api(`/listings/${params.id}/price-history`)),
 		);
 
 		this.server.registerTool(
 			"get_best_value_listings",
 			{
 				description:
-					"Find listings priced below their neighborhood median -- best deals. Returns listings sorted by discount percentage (biggest savings first), with each listing showing its price, neighborhood_median, and discount_pct. When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
+					"Find listings priced below their neighborhood median -- best deals. Returns listings sorted by discount percentage (biggest savings first), with each listing showing its price, neighborhood_median, and discount_pct. When filtering by neighborhood, call list_neighborhoods first to get neighborhood ids.",
 				inputSchema: {
 					city: z.enum(CITY_ENUM).optional().default("riyadh"),
 					listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
@@ -538,14 +507,19 @@ export class MyMCP extends McpAgent<Env> {
 						.describe(
 							"Use 'commercial' for office, shop, warehouse. Default: 'residential'.",
 						),
-					property_type: z.enum(PROPERTY_TYPE_ENUM).optional(),
-					neighborhood: z
+					property_type: z
+						.enum(["apartment", "villa", "floor", "duplex"])
+						.optional()
+						.describe("Deals are residential only."),
+					neighborhood_id: z
 						.string()
 						.optional()
 						.describe("Neighborhood name(s), comma-separated"),
 					beds: z.number().optional().describe("Exact number of bedrooms"),
 					min_discount_pct: z
 						.number()
+						.min(5)
+						.max(90)
 						.optional()
 						.default(10)
 						.describe(
@@ -558,18 +532,17 @@ export class MyMCP extends McpAgent<Env> {
 			async (params) => {
 				return result(
 					"get_best_value_listings",
-					await callApi(
-						buildUrl("/api/best-value", {
-							city: params.city,
-							listing_type: params.listing_type,
-							listing_category: params.listing_category,
-							property_type: params.property_type,
-							neighborhood: params.neighborhood,
-							beds: params.beds,
-							min_discount_pct: params.min_discount_pct,
-							limit: params.limit,
-						}),
-					),
+					await api("/market/deals", {
+						city: params.city,
+						listing_type: params.listing_type,
+						// /market/deals is residential by definition; it has no
+						// listing_category and needs a residential property type.
+						property_type: concrete(params.property_type),
+						neighborhood_id: params.neighborhood_id,
+						beds: params.beds,
+						min_discount_pct: params.min_discount_pct,
+						limit: params.limit,
+					}),
 					params,
 				);
 			},
@@ -581,7 +554,7 @@ export class MyMCP extends McpAgent<Env> {
 			"get_price_distribution",
 			{
 				description:
-					"Get price distribution histogram for a market segment. Returns 30 buckets with counts, median, mean, and cumulative percentiles (e.g. '72% of listings are under 50K'). Supports optional bedroom filter to get distribution for a specific bedroom count (e.g. median 1BR rent in Al Yasmin). When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
+					"Get price distribution histogram for a market segment. Returns 30 buckets with counts, median, mean, and cumulative percentiles (e.g. '72% of listings are under 50K'). Supports optional bedroom filter to get distribution for a specific bedroom count (e.g. median 1BR rent in Al Yasmin). When filtering by neighborhood, call list_neighborhoods first to get neighborhood ids.",
 				inputSchema: {
 					city: z.enum(CITY_ENUM).optional().default("riyadh"),
 					listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
@@ -593,7 +566,7 @@ export class MyMCP extends McpAgent<Env> {
 							"Use 'commercial' for office, shop, warehouse. Default: 'residential'.",
 						),
 					property_type: z.enum(PROPERTY_TYPE_ENUM).optional(),
-					neighborhood: z
+					neighborhood_id: z
 						.string()
 						.optional()
 						.describe("Neighborhood name(s), comma-separated"),
@@ -610,16 +583,14 @@ export class MyMCP extends McpAgent<Env> {
 			async (params) =>
 				result(
 					"get_price_distribution",
-					await callApi(
-						buildUrl("/api/histogram", {
-							city: params.city,
-							listing_type: params.listing_type,
-							listing_category: params.listing_category,
-							property_type: params.property_type,
-							neighborhood: params.neighborhood,
-							beds: params.beds,
-						}),
-					),
+					await api("/market/price-distribution", {
+						city: params.city,
+						listing_type: params.listing_type,
+						listing_category: params.listing_category,
+						property_type: concrete(params.property_type),
+						neighborhood_id: params.neighborhood_id,
+						beds: params.beds,
+					}),
 					params,
 				),
 		);
@@ -628,7 +599,7 @@ export class MyMCP extends McpAgent<Env> {
 			"get_area_distribution",
 			{
 				description:
-					"Get area (sqm) distribution histogram. Returns 30 buckets with counts, plus median and mean area. When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
+					"Get area (sqm) distribution histogram. Returns 30 buckets with counts, plus median and mean area. When filtering by neighborhood, call list_neighborhoods first to get neighborhood ids.",
 				inputSchema: {
 					city: z.enum(CITY_ENUM).optional().default("riyadh"),
 					listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
@@ -640,7 +611,7 @@ export class MyMCP extends McpAgent<Env> {
 							"Use 'commercial' for office, shop, warehouse. Default: 'residential'.",
 						),
 					property_type: z.enum(PROPERTY_TYPE_ENUM).optional(),
-					neighborhood: z
+					neighborhood_id: z
 						.string()
 						.optional()
 						.describe("Neighborhood name(s), comma-separated"),
@@ -650,15 +621,13 @@ export class MyMCP extends McpAgent<Env> {
 			async (params) =>
 				result(
 					"get_area_distribution",
-					await callApi(
-						buildUrl("/api/area-histogram", {
-							city: params.city,
-							listing_type: params.listing_type,
-							listing_category: params.listing_category,
-							property_type: params.property_type,
-							neighborhood: params.neighborhood,
-						}),
-					),
+					await api("/market/area-distribution", {
+						city: params.city,
+						listing_type: params.listing_type,
+						listing_category: params.listing_category,
+						property_type: concrete(params.property_type),
+						neighborhood_id: params.neighborhood_id,
+					}),
 					params,
 				),
 		);
@@ -672,10 +641,7 @@ export class MyMCP extends McpAgent<Env> {
 				annotations: READ_ONLY,
 			},
 			async ({ id }) =>
-				result(
-					"get_listing_market_stats",
-					await callApi(buildUrl("/api/listing-stats", { id })),
-				),
+				result("get_listing_market_stats", await api(`/listings/${id}/market-position`)),
 		);
 
 		this.server.registerTool(
@@ -685,7 +651,7 @@ export class MyMCP extends McpAgent<Env> {
 					"Compare 2-5 neighborhoods side by side. Returns median price, area, price/sqm, price range (P25-P75), amenity percentages, property mix, bedroom breakdown, gross rental yield, and rent-to-income ratio (for rent listings). IMPORTANT: Call list_neighborhoods first to get exact English names.",
 				inputSchema: {
 					city: z.enum(CITY_ENUM).optional().default("riyadh"),
-					neighborhoods: z
+					neighborhood_id: z
 						.string()
 						.describe(
 							"2-5 neighborhood English names, comma-separated. Use list_neighborhoods to get valid names.",
@@ -698,14 +664,12 @@ export class MyMCP extends McpAgent<Env> {
 			async (params) =>
 				result(
 					"compare_neighborhoods",
-					await callApi(
-						buildUrl("/api/neighborhood-compare", {
-							city: params.city,
-							neighborhoods: params.neighborhoods,
-							listing_type: params.listing_type,
-							property_type: params.property_type,
-						}),
-					),
+					await api("/market/neighborhoods/compare", {
+						city: params.city,
+						neighborhood_id: params.neighborhood_id,
+						listing_type: params.listing_type,
+						property_type: params.property_type,
+					}),
 					params,
 				),
 		);
@@ -714,29 +678,32 @@ export class MyMCP extends McpAgent<Env> {
 			"get_rental_yield",
 			{
 				description:
-					"Calculate gross rental yield for a neighborhood or city by comparing median sale price to median annual rent. Returns yield percentage, listing counts, and top 10 neighborhoods by yield when no neighborhood is specified. Use to fact-check investment return claims.",
+					"Calculate gross rental yield for a neighborhood or city by comparing median sale price to median annual rent. Returns the city-wide figure plus every neighborhood with enough listings on both sides. Gross yield ignores vacancy, service charges and transaction costs, and compares asking prices, so use it to rank areas rather than to value a property.",
 				inputSchema: {
 					city: z.enum(CITY_ENUM).optional().default("riyadh"),
-					neighborhood: z
+					neighborhood_id: z
 						.string()
 						.optional()
 						.describe(
-							"Neighborhood name(s), comma-separated. Use list_neighborhoods to get valid names.",
+							"Neighborhood id(s), comma-separated. Call list_neighborhoods first to get ids.",
 						),
-					property_type: z.enum(PROPERTY_TYPE_ENUM).optional(),
+					property_type: z
+						.enum(["apartment", "villa", "floor", "duplex", "land", "building"])
+						.default("apartment")
+						.describe(
+							"Required, so rents and prices of different kinds of property are never mixed.",
+						),
 				},
 				annotations: READ_ONLY,
 			},
 			async (params) =>
 				result(
 					"get_rental_yield",
-					await callApi(
-						buildUrl("/api/rental-yield", {
-							city: params.city,
-							neighborhood: params.neighborhood,
-							property_type: params.property_type,
-						}),
-					),
+					await api("/market/rental-yield", {
+						city: params.city,
+						neighborhood_id: params.neighborhood_id,
+						property_type: concrete(params.property_type),
+					}),
 					params,
 				),
 		);
@@ -745,11 +712,11 @@ export class MyMCP extends McpAgent<Env> {
 			"get_supply_stats",
 			{
 				description:
-					"Get new listing volume trends: how many listings appeared this week vs last week, this month vs last month, with percentage changes and total active count. Use to assess whether supply is increasing or decreasing in a market. When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
+					"Get new listing volume trends: how many listings appeared this week vs last week, this month vs last month, with percentage changes and total active count. Use to assess whether supply is increasing or decreasing in a market. When filtering by neighborhood, call list_neighborhoods first to get neighborhood ids.",
 				inputSchema: {
 					city: z.enum(CITY_ENUM).optional().default("riyadh"),
 					listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
-					neighborhood: z
+					neighborhood_id: z
 						.string()
 						.optional()
 						.describe("Neighborhood name(s), comma-separated"),
@@ -760,14 +727,12 @@ export class MyMCP extends McpAgent<Env> {
 			async (params) =>
 				result(
 					"get_supply_stats",
-					await callApi(
-						buildUrl("/api/supply-stats", {
-							city: params.city,
-							listing_type: params.listing_type,
-							neighborhood: params.neighborhood,
-							property_type: params.property_type,
-						}),
-					),
+					await api("/market/supply", {
+						city: params.city,
+						listing_type: params.listing_type,
+						neighborhood_id: params.neighborhood_id,
+						property_type: concrete(params.property_type),
+					}),
 					params,
 				),
 		);
@@ -776,11 +741,11 @@ export class MyMCP extends McpAgent<Env> {
 			"get_vacancy_indicator",
 			{
 				description:
-					"Count stale listings (on market 30/60/90+ days) as an oversupply signal. Returns stale counts, percentages, and a freshness score (healthy/moderate/oversaturated). Use to assess whether a neighborhood has too much unsold/unrented inventory. When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
+					"Count stale listings (on market 30/60/90+ days) as an oversupply signal. Returns stale counts, percentages, and a freshness score (healthy/moderate/oversaturated). Use to assess whether a neighborhood has too much unsold/unrented inventory. When filtering by neighborhood, call list_neighborhoods first to get neighborhood ids.",
 				inputSchema: {
 					city: z.enum(CITY_ENUM).optional().default("riyadh"),
 					listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
-					neighborhood: z
+					neighborhood_id: z
 						.string()
 						.optional()
 						.describe("Neighborhood name(s), comma-separated"),
@@ -791,14 +756,12 @@ export class MyMCP extends McpAgent<Env> {
 			async (params) =>
 				result(
 					"get_vacancy_indicator",
-					await callApi(
-						buildUrl("/api/vacancy-indicator", {
-							city: params.city,
-							listing_type: params.listing_type,
-							neighborhood: params.neighborhood,
-							property_type: params.property_type,
-						}),
-					),
+					await api("/market/vacancy", {
+						city: params.city,
+						listing_type: params.listing_type,
+						neighborhood_id: params.neighborhood_id,
+						property_type: concrete(params.property_type),
+					}),
 					params,
 				),
 		);
@@ -814,20 +777,18 @@ export class MyMCP extends McpAgent<Env> {
 					bedrooms: z
 						.string()
 						.optional()
-						.describe("Filter by bedroom count, or 'all' for aggregate"),
+						.describe("Filter by bedroom count, or 'all' for every bedroom count"),
 				},
 				annotations: READ_ONLY,
 			},
 			async (params) =>
 				result(
 					"get_neighborhood_rent_map",
-					await callApi(
-						buildUrl("/api/neighborhood-rent-map", {
-							city: params.city,
-							listing_type: params.listing_type,
-							bedrooms: params.bedrooms,
-						}),
-					),
+					await api("/market/neighborhoods", {
+						city: params.city,
+						listing_type: params.listing_type,
+						beds: concrete(params.bedrooms),
+					}),
 					params,
 				),
 		);
@@ -852,13 +813,11 @@ export class MyMCP extends McpAgent<Env> {
 			async (params) =>
 				result(
 					"get_market_summary",
-					await callApi(
-						buildUrl("/api/market-summary", {
-							city: params.city,
-							listing_type: params.listing_type,
-							property_type: params.property_type,
-						}),
-					),
+					await api("/market/summary", {
+						city: params.city,
+						listing_type: params.listing_type,
+						property_type: concrete(params.property_type),
+					}),
 					params,
 				),
 		);
@@ -870,7 +829,7 @@ export class MyMCP extends McpAgent<Env> {
 					"Get monthly price trends for 1-5 neighborhoods over time. Returns median price, P25/P75 range, and listing count per month. Shows price_change_pct between earliest and latest month. Use to answer questions about whether prices are rising or falling in a neighborhood. IMPORTANT: Call list_neighborhoods first to get exact English names.",
 				inputSchema: {
 					city: z.enum(CITY_ENUM).optional().default("riyadh"),
-					neighborhoods: z
+					neighborhood_id: z
 						.string()
 						.describe(
 							"1-5 neighborhood English names, comma-separated. Use list_neighborhoods to get valid names.",
@@ -879,24 +838,24 @@ export class MyMCP extends McpAgent<Env> {
 					property_type: z.enum(PROPERTY_TYPE_ENUM).optional(),
 					months: z
 						.number()
+						.min(2)
+						.max(12)
 						.optional()
 						.default(6)
-						.describe("How many months of history (max 24)"),
+						.describe("How many months of history (max 12)"),
 				},
 				annotations: READ_ONLY,
 			},
 			async (params) =>
 				result(
 					"get_neighborhood_trends",
-					await callApi(
-						buildUrl("/api/neighborhood-trends", {
-							city: params.city,
-							neighborhoods: params.neighborhoods,
-							listing_type: params.listing_type,
-							property_type: params.property_type,
-							months: params.months,
-						}),
-					),
+					await api("/market/trends", {
+						city: params.city,
+						neighborhood_id: params.neighborhood_id,
+						listing_type: params.listing_type,
+						property_type: concrete(params.property_type),
+						months: params.months,
+					}),
 					params,
 				),
 		);
@@ -912,11 +871,7 @@ export class MyMCP extends McpAgent<Env> {
 				annotations: READ_ONLY,
 			},
 			async ({ city }) =>
-				result(
-					"list_neighborhoods",
-					await callApi(buildUrl("/api/neighborhoods", { city })),
-					{ city },
-				),
+				result("list_neighborhoods", await api(`/cities/${city}/neighborhoods`), { city }),
 		);
 
 		this.server.registerTool(
@@ -928,96 +883,7 @@ export class MyMCP extends McpAgent<Env> {
 				annotations: READ_ONLY,
 			},
 			async ({ city }) =>
-				result(
-					"list_city_directions",
-					await callApi(buildUrl("/api/directions", { city })),
-					{ city },
-				),
-		);
-
-		this.server.registerTool(
-			"get_neighborhood_pois",
-			{
-				description:
-					"Get points of interest near a neighborhood. Returns up to 6 POIs sorted by distance.",
-				inputSchema: {
-					city: z.enum(CITY_ENUM).describe("City slug"),
-					neighborhood: z
-						.string()
-						.describe(
-							"Neighborhood English name (use list_neighborhoods to get valid names)",
-						),
-				},
-				annotations: READ_ONLY,
-			},
-			async ({ city, neighborhood }) =>
-				result(
-					"get_neighborhood_pois",
-					await callApi(
-						buildUrl("/api/neighborhood-pois", {
-							city,
-							neighborhood,
-						}),
-					),
-					{ city },
-				),
-		);
-
-		this.server.registerTool(
-			"get_map_listings",
-			{
-				description:
-					"Get listings within geographic bounds. Result count scales with zoom level.",
-				inputSchema: {
-					bounds: z
-						.string()
-						.describe("Bounding box as 'south,west,north,east' coordinates"),
-					zoom: z.number().optional().default(12).describe("Map zoom level"),
-					listing_type: z.enum(["rent", "sale"]).optional().default("rent"),
-					property_type: z.enum(PROPERTY_TYPE_ENUM).optional(),
-					city: z.enum(CITY_ENUM).optional().default("riyadh"),
-					sort: z
-						.enum(["relevance", "price_asc", "price_desc", "area_desc", "newest"])
-						.optional(),
-				},
-				annotations: READ_ONLY,
-			},
-			async (params) =>
-				result(
-					"get_map_listings",
-					await callApi(
-						buildUrl("/api/map-listings", {
-							bounds: params.bounds,
-							zoom: params.zoom,
-							listing_type: params.listing_type,
-							property_type: params.property_type,
-							city: params.city,
-							sort: params.sort,
-						}),
-					),
-					params,
-				),
-		);
-
-		this.server.registerTool(
-			"get_map_pois",
-			{
-				description:
-					"Get points of interest within geographic bounds. Returns empty if zoom < 10.",
-				inputSchema: {
-					bounds: z
-						.string()
-						.describe("Bounding box as 'south,west,north,east' coordinates"),
-					zoom: z
-						.number()
-						.optional()
-						.default(12)
-						.describe("Map zoom level (min 10 for results)"),
-				},
-				annotations: READ_ONLY,
-			},
-			async ({ bounds, zoom }) =>
-				result("get_map_pois", await callApi(buildUrl("/api/map-pois", { bounds, zoom }))),
+				result("list_city_directions", await api(`/cities/${city}/directions`), { city }),
 		);
 
 		// --- Projects (Off-Plan & Ready) ---
@@ -1026,7 +892,7 @@ export class MyMCP extends McpAgent<Env> {
 			"search_projects",
 			{
 				description:
-					"Search off-plan and ready real estate development projects in Saudi Arabia. Returns paginated projects with name, developer, city, neighborhood, starting price, price range, area range, unit count, bedroom range, images, and status. Use for questions about new developments, off-plan projects, or specific developers. IMPORTANT: When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
+					"Search off-plan and ready real estate development projects in Saudi Arabia. Returns paginated projects with name, developer, city, neighborhood, starting price, price range, area range, unit count, bedroom range, images, and status. Use for questions about new developments, off-plan projects, or specific developers. IMPORTANT: When filtering by neighborhood, call list_neighborhoods first to get neighborhood ids.",
 				inputSchema: {
 					city: z.enum(CITY_ENUM).optional().default("riyadh").describe("City to search"),
 					type: z
@@ -1046,11 +912,11 @@ export class MyMCP extends McpAgent<Env> {
 						.describe(
 							"Developer name (exact match). Use list_developers to get valid names.",
 						),
-					neighborhood: z
+					neighborhood_id: z
 						.string()
 						.optional()
 						.describe(
-							"Neighborhood name(s), comma-separated. Use list_neighborhoods to get valid names.",
+							"Neighborhood id(s), comma-separated. Call list_neighborhoods first to get ids.",
 						),
 					features: z
 						.string()
@@ -1070,24 +936,21 @@ export class MyMCP extends McpAgent<Env> {
 						.number()
 						.optional()
 						.describe("Maximum project starting price in SAR"),
-					unit_beds: z
-						.number()
-						.optional()
-						.describe("Filter to projects that have units with this bedroom count"),
-					unit_price_min: z.number().optional().describe("Minimum unit price in SAR"),
-					unit_price_max: z.number().optional().describe("Maximum unit price in SAR"),
-					unit_area_min: z.number().optional().describe("Minimum unit area in sqm"),
-					unit_area_max: z.number().optional().describe("Maximum unit area in sqm"),
 					q: z
 						.string()
 						.optional()
 						.describe("Search project name or developer name (partial match)"),
 					sort: z
-						.enum(["newest", "price_asc", "price_desc"])
+						.enum(["updated_desc", "price_asc", "price_desc"])
 						.optional()
-						.default("newest")
+						.default("updated_desc")
 						.describe("Sort order"),
-					page: z.number().optional().default(1).describe("Page number"),
+					cursor: z
+						.string()
+						.optional()
+						.describe(
+							"next_cursor from a previous response, to get the following page.",
+						),
 					limit: z.number().optional().default(30).describe("Results per page (max 100)"),
 				},
 				annotations: READ_ONLY,
@@ -1095,28 +958,21 @@ export class MyMCP extends McpAgent<Env> {
 			async (params) => {
 				return result(
 					"search_projects",
-					await callApi(
-						buildUrl("/api/projects", {
-							city: params.city,
-							type: params.type,
-							category: params.category,
-							developer: params.developer,
-							neighborhood: params.neighborhood,
-							features: params.features,
-							banks: params.banks,
-							price_min: params.price_min,
-							price_max: params.price_max,
-							unit_beds: params.unit_beds,
-							unit_price_min: params.unit_price_min,
-							unit_price_max: params.unit_price_max,
-							unit_area_min: params.unit_area_min,
-							unit_area_max: params.unit_area_max,
-							q: params.q,
-							sort: params.sort,
-							page: params.page,
-							limit: params.limit,
-						}),
-					),
+					await api("/projects", {
+						city: params.city,
+						project_type: concrete(params.type),
+						listing_category: concrete(params.category),
+						developer: params.developer,
+						neighborhood_id: params.neighborhood_id,
+						features: params.features,
+						banks: params.banks,
+						price_min: params.price_min,
+						price_max: params.price_max,
+						q: params.q,
+						sort: params.sort,
+						cursor: params.cursor,
+						limit: params.limit,
+					}),
 					params,
 				);
 			},
@@ -1126,32 +982,43 @@ export class MyMCP extends McpAgent<Env> {
 			"get_project",
 			{
 				description:
-					"Get full details for a specific development project by ID. Returns all project fields (name, developer, city, neighborhood, status, type, starting price, price range, area range, features, supported banks, images, coordinates, polygon) plus all its unit listings with price, bedrooms, bathrooms, area, and floor.",
+					"Get full details for a specific development project by ID. Returns all project fields (name, developer, city, neighborhood, status, type, starting price, price range, area range, features, supported banks, images, coordinates, polygon) plus a summary of its linked units — how many, and their price, area and bedroom ranges. For the units themselves call search_project_units with this project's developer or neighborhood.",
 				inputSchema: { id: z.number().describe("Project ID") },
 				annotations: READ_ONLY,
 			},
-			async ({ id }) => result("get_project", await callApi(buildUrl(`/api/projects/${id}`))),
+			async ({ id }) => result("get_project", await api(`/projects/${id}`)),
 		);
 
 		this.server.registerTool(
 			"list_developers",
 			{
 				description:
-					"List all real estate developers with active projects in a city. Returns an array of developer names. Use this to get valid developer names before filtering search_projects by developer.",
+					"List real estate developers with active projects in a city. Returns each developer's name, how many projects they have and which cities they build in. Use it to get an exact developer name before filtering search_projects by developer. Results are paginated: pass next_cursor to see more.",
 				inputSchema: {
 					city: z
 						.enum(CITY_ENUM)
 						.optional()
 						.default("riyadh")
 						.describe("City to list developers for"),
+					cursor: z
+						.string()
+						.optional()
+						.describe(
+							"next_cursor from a previous response, to get the following page.",
+						),
+					limit: z.number().optional().default(50).describe("Results per page (max 100)"),
 				},
 				annotations: READ_ONLY,
 			},
-			async ({ city }) =>
+			async (params) =>
 				result(
 					"list_developers",
-					await callApi(buildUrl("/api/projects/developers", { city })),
-					{ city },
+					await api("/developers", {
+						city: params.city,
+						cursor: params.cursor,
+						limit: params.limit,
+					}),
+					params,
 				),
 		);
 
@@ -1159,7 +1026,7 @@ export class MyMCP extends McpAgent<Env> {
 			"search_project_units",
 			{
 				description:
-					"Search individual units within development projects. Returns paginated unit listings with price, bedrooms, bathrooms, area, floor, property type, project name, and neighborhood. Use when the user wants to find specific unit types across projects (e.g. '3BR units under 1.5M in off-plan projects'). IMPORTANT: When filtering by neighborhood, call list_neighborhoods first to get exact English names.",
+					"Search individual units within development projects. Returns paginated unit listings with price, bedrooms, bathrooms, area, floor, property type, project name, and neighborhood. Use when the user wants to find specific unit types across projects (e.g. '3BR units under 1.5M in off-plan projects'). IMPORTANT: When filtering by neighborhood, call list_neighborhoods first to get neighborhood ids.",
 				inputSchema: {
 					city: z.enum(CITY_ENUM).describe("City to search (required)"),
 					unit_beds: z
@@ -1174,11 +1041,11 @@ export class MyMCP extends McpAgent<Env> {
 					unit_price_max: z.number().optional().describe("Maximum unit price in SAR"),
 					unit_area_min: z.number().optional().describe("Minimum unit area in sqm"),
 					unit_area_max: z.number().optional().describe("Maximum unit area in sqm"),
-					neighborhood: z
+					neighborhood_id: z
 						.string()
 						.optional()
 						.describe(
-							"Neighborhood name(s), comma-separated. Use list_neighborhoods to get valid names.",
+							"Neighborhood id(s), comma-separated. Call list_neighborhoods first to get ids.",
 						),
 					type: z
 						.enum(["off_plan", "ready", "all"])
@@ -1195,21 +1062,17 @@ export class MyMCP extends McpAgent<Env> {
 						.optional()
 						.describe("Comma-separated project features to require"),
 					banks: z.string().optional().describe("Comma-separated supported bank names"),
-					price_min: z
-						.number()
-						.optional()
-						.describe("Minimum project starting price in SAR"),
-					price_max: z
-						.number()
-						.optional()
-						.describe("Maximum project starting price in SAR"),
-					q: z.string().optional().describe("Search project name or developer name"),
 					sort: z
 						.enum(["newest", "price_asc", "price_desc", "area_desc", "bedrooms_desc"])
 						.optional()
 						.default("newest")
 						.describe("Sort order"),
-					page: z.number().optional().default(1).describe("Page number"),
+					cursor: z
+						.string()
+						.optional()
+						.describe(
+							"next_cursor from a previous response, to get the following page.",
+						),
 					limit: z.number().optional().default(30).describe("Results per page (max 100)"),
 				},
 				annotations: READ_ONLY,
@@ -1217,28 +1080,25 @@ export class MyMCP extends McpAgent<Env> {
 			async (params) => {
 				return result(
 					"search_project_units",
-					await callApi(
-						buildUrl("/api/projects/units", {
-							city: params.city,
-							unit_beds: params.unit_beds,
-							unit_bathrooms: params.unit_bathrooms,
-							unit_price_min: params.unit_price_min,
-							unit_price_max: params.unit_price_max,
-							unit_area_min: params.unit_area_min,
-							unit_area_max: params.unit_area_max,
-							neighborhood: params.neighborhood,
-							type: params.type,
-							developer: params.developer,
-							features: params.features,
-							banks: params.banks,
-							price_min: params.price_min,
-							price_max: params.price_max,
-							q: params.q,
-							sort: params.sort,
-							page: params.page,
-							limit: params.limit,
-						}),
-					),
+					await api("/project-units", {
+						city: params.city,
+						bedrooms: params.unit_beds,
+						bathrooms: params.unit_bathrooms,
+						// On this endpoint price and area are the unit's; the project's
+						// own starting price is not a filter here.
+						price_min: params.unit_price_min,
+						price_max: params.unit_price_max,
+						area_min: params.unit_area_min,
+						area_max: params.unit_area_max,
+						neighborhood_id: params.neighborhood_id,
+						project_type: concrete(params.type),
+						developer: params.developer,
+						features: params.features,
+						banks: params.banks,
+						sort: params.sort,
+						cursor: params.cursor,
+						limit: params.limit,
+					}),
 					params,
 				);
 			},
