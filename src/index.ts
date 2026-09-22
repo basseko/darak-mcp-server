@@ -9,6 +9,22 @@ import { z } from "zod";
 // rollup and dashboards as any other API consumer.
 const DEFAULT_API_BASE = "https://api.darak.app/v1";
 
+/**
+ * Where a client goes to sign in; this server only consumes the result.
+ *
+ * It must be the issuer exactly as the discovery document states it
+ * (RFC 8414 §3.3), not the path the endpoints happen to live under: a client
+ * fetches `<issuer>/.well-known/oauth-authorization-server` and rejects the
+ * result if the `issuer` inside does not match what it asked for.
+ */
+const AUTHORIZATION_SERVER = "https://darak.app";
+
+/** The token from `Authorization: Bearer <token>`, or "" when absent. */
+function bearerFrom(header: string | null): string {
+	const m = /^Bearer\s+(.+)$/i.exec(header?.trim() ?? "");
+	return m ? m[1].trim() : "";
+}
+
 const CITY_ENUM = ["riyadh", "jeddah", "eastern_province", "makkah", "madinah"] as const;
 
 const PROPERTY_TYPE_ENUM = [
@@ -87,6 +103,13 @@ export interface CallerProps {
 	ipHash: string;
 	userAgent: string;
 	sessionId: string;
+	/**
+	 * The caller's OAuth access token, when they have connected an account.
+	 * Forwarded to the API unchanged: this server is a resource server, not an
+	 * authorization server, so it never mints or inspects credentials. Empty
+	 * for an anonymous session, which falls back to the shared service key.
+	 */
+	accessToken: string;
 }
 
 export async function hashIp(ip: string, salt: string): Promise<string> {
@@ -212,7 +235,14 @@ export class MyMCP extends McpAgent<Env> {
 		const api = (
 			path: string,
 			params?: Record<string, string | number | boolean | undefined>,
-		) => callApi(buildUrl(path, params, this.env.DARAK_API_BASE), this.env.DARAK_API_KEY);
+		) =>
+			callApi(
+				buildUrl(path, params, this.env.DARAK_API_BASE),
+				// A connected caller acts as themselves and is metered to their
+				// own organization; anonymous sessions share the service key.
+				(this.props as Partial<CallerProps> | undefined)?.accessToken ||
+					this.env.DARAK_API_KEY,
+			);
 
 		// --- Search & Listings ---
 
@@ -1110,6 +1140,21 @@ export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext) {
 		const url = new URL(request.url);
 
+		// RFC 9728. An MCP client reads this to discover where to sign in, and
+		// only looks for it after a 401 naming it, so advertising it costs an
+		// anonymous caller nothing.
+		if (url.pathname === "/.well-known/oauth-protected-resource") {
+			return Response.json(
+				{
+					resource: `${url.origin}/mcp`,
+					authorization_servers: [AUTHORIZATION_SERVER],
+					bearer_methods_supported: ["header"],
+					resource_documentation: "https://platform.darak.app/docs",
+				},
+				{ headers: { "cache-control": "public, max-age=3600" } },
+			);
+		}
+
 		if (url.pathname === "/mcp" || url.pathname.startsWith("/mcp/")) {
 			// The agents SDK hands ctx.props to the Durable Object as this.props;
 			// ExecutionContext types it read-only.
@@ -1118,6 +1163,7 @@ export default {
 				ipHash: ip ? await hashIp(ip, env.MCP_IP_SALT || "darak-mcp") : "",
 				userAgent: (request.headers.get("user-agent") ?? "").slice(0, 120),
 				sessionId: request.headers.get("mcp-session-id") ?? "",
+				accessToken: bearerFrom(request.headers.get("authorization")),
 			};
 			return MyMCP.serve("/mcp").fetch(request, env, ctx);
 		}
