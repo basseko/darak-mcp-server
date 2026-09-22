@@ -47,12 +47,12 @@ Riyadh, Jeddah, Eastern Province, Makkah, Madinah.
 
 ```json
 {
-  "mcpServers": {
-    "darak": {
-      "command": "npx",
-      "args": ["mcp-remote", "https://darak.app/mcp"]
-    }
-  }
+	"mcpServers": {
+		"darak": {
+			"command": "npx",
+			"args": ["mcp-remote", "https://darak.app/mcp"]
+		}
+	}
 }
 ```
 
