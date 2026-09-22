@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
+import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
 
 // --- Helpers ---
@@ -58,11 +59,21 @@ function buildUrl(
 	return url.toString();
 }
 
-async function callApi(url: string, apiKey?: string): Promise<unknown> {
+/** A result plus what it cost, in the same units the paid plans are sold in. */
+interface ApiResult {
+	data: unknown;
+	units: number;
+}
+
+async function callApi(url: string, apiKey?: string): Promise<ApiResult> {
 	try {
 		const res = await fetch(url, {
 			headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
 		});
+		// The API prices every request and says so; anonymous budgets are kept
+		// in that same currency rather than in a count of requests, so "what
+		// anonymous use costs" and "what a plan buys" are directly comparable.
+		const units = Number(res.headers.get("x-request-units") ?? "0") || 0;
 		if (!res.ok) {
 			const text = await res.text();
 			console.error(
@@ -78,17 +89,17 @@ async function callApi(url: string, apiKey?: string): Promise<unknown> {
 			// reads "monthly quota exceeded" rather than a stringified blob.
 			try {
 				const body = JSON.parse(text) as { error?: unknown };
-				if (body && typeof body === "object" && body.error) return body;
+				if (body && typeof body === "object" && body.error) return { data: body, units };
 			} catch {
 				// Not JSON — fall through to the generic message.
 			}
-			return { error: `API returned ${res.status}: ${text}` };
+			return { data: { error: `API returned ${res.status}: ${text}` }, units };
 		}
-		return res.json();
+		return { data: await res.json(), units };
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		console.error(JSON.stringify({ message: "API fetch failed", url, error: message }));
-		return { error: `Failed to reach API: ${message}` };
+		return { data: { error: `Failed to reach API: ${message}` }, units: 0 };
 	}
 }
 
@@ -191,9 +202,11 @@ function textResult(
 			isError: true,
 		};
 	}
-	return {
-		content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-	};
+	const body = JSON.stringify(data, null, 2);
+	// Only anonymous answers carry it: a connected caller has accepted the
+	// terms, which say the same thing at greater length.
+	const text = caller.accessToken ? body : `${body}\n\n${ATTRIBUTION}`;
+	return { content: [{ type: "text" as const, text }] };
 }
 
 /** The API has no "all" — the filter is simply absent. */
@@ -208,9 +221,65 @@ function sinceFrom(window?: "3d" | "1w" | "1m"): string | undefined {
 	return new Date(Date.now() - days * 86_400_000).toISOString();
 }
 
+/**
+ * What an anonymous caller may spend in a month, in the API's own units.
+ *
+ * Deliberately well under the Free plan's 2,500: enough for hundreds of
+ * questions in Claude, far too little to collect the database. A full pull of
+ * ~100k listings costs thousands of units, so this stops extraction outright
+ * while leaving ordinary use untouched.
+ */
+const ANON_MONTHLY_UNITS = 500;
+
+/** Shown with every anonymous answer, so the data is credited wherever it lands. */
+const ATTRIBUTION = "Data from Darak (https://darak.app).";
+
+/**
+ * What an anonymous caller is told when they run out of room. This is the
+ * moment to offer an account: they have just been stopped, so the prompt is
+ * useful rather than an interruption, and a connected caller gets their own
+ * organization's limits instead of sharing one bucket with every other
+ * anonymous session.
+ */
+const CONNECT_HINT =
+	`Anonymous use of the Darak MCP server is limited to ${ANON_MONTHLY_UNITS} units a month per caller, ` +
+	"and this caller has spent them. Connect a free Darak account for five times the allowance and your own " +
+	"limits: the client will offer to sign in, or see https://platform.darak.app.";
+
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false } as const;
 
 // --- MCP Agent ---
+
+/**
+ * One anonymous caller's budget for the current month.
+ *
+ * Anonymous use is capped by what it costs, not by how often it is asked:
+ * a per-minute limit never bounds total extraction, because a steady puller
+ * stays under it forever. The budget is held per caller rather than pooled,
+ * so one heavy client cannot spend everyone else's.
+ */
+export class AnonBudget extends DurableObject {
+	/** Spends `units` and says whether the caller may continue afterwards. */
+	async spend(units: number): Promise<{ used: number; remaining: number }> {
+		const month = new Date().toISOString().slice(0, 7);
+		const stored = (await this.ctx.storage.get<{ month: string; used: number }>("b")) ?? {
+			month,
+			used: 0,
+		};
+		// A new month starts from zero; nothing has to sweep old records.
+		const used = (stored.month === month ? stored.used : 0) + Math.max(0, units);
+		await this.ctx.storage.put("b", { month, used });
+		return { used, remaining: Math.max(0, ANON_MONTHLY_UNITS - used) };
+	}
+
+	/** Reads the budget without spending, for the pre-flight check. */
+	async remaining(): Promise<number> {
+		const month = new Date().toISOString().slice(0, 7);
+		const stored = await this.ctx.storage.get<{ month: string; used: number }>("b");
+		if (!stored || stored.month !== month) return ANON_MONTHLY_UNITS;
+		return Math.max(0, ANON_MONTHLY_UNITS - stored.used);
+	}
+}
 
 export class MyMCP extends McpAgent<Env> {
 	server = new McpServer({
@@ -232,17 +301,36 @@ export class MyMCP extends McpAgent<Env> {
 
 		// Every tool reaches the API through here, so the base URL and the key are
 		// decided in one place rather than at 26 call sites.
-		const api = (
+		const api = async (
 			path: string,
 			params?: Record<string, string | number | boolean | undefined>,
-		) =>
-			callApi(
-				buildUrl(path, params, this.env.DARAK_API_BASE),
-				// A connected caller acts as themselves and is metered to their
-				// own organization; anonymous sessions share the service key.
-				(this.props as Partial<CallerProps> | undefined)?.accessToken ||
-					this.env.DARAK_API_KEY,
+		) => {
+			const caller = (this.props ?? {}) as Partial<CallerProps>;
+			// A connected caller acts as themselves and is metered to their own
+			// organization, so the API enforces their plan and nothing is
+			// counted here.
+			if (caller.accessToken) {
+				const { data } = await callApi(
+					buildUrl(path, params, this.env.DARAK_API_BASE),
+					caller.accessToken,
+				);
+				return data;
+			}
+			// Anonymous callers share one key, so their budget is kept here.
+			const budget = this.env.ANON_BUDGET.get(
+				this.env.ANON_BUDGET.idFromName(caller.ipHash || "anonymous"),
 			);
+			if ((await budget.remaining()) <= 0) return { error: CONNECT_HINT };
+			const { data, units } = await callApi(
+				buildUrl(path, params, this.env.DARAK_API_BASE),
+				this.env.DARAK_API_KEY,
+			);
+			// Charged after the fact, from what the API says the call cost. A
+			// caller can overshoot by one request; billing the estimate instead
+			// would mean guessing, and guessing high punishes ordinary use.
+			this.ctx.waitUntil(budget.spend(units).then(() => {}));
+			return data;
+		};
 
 		// --- Search & Listings ---
 
@@ -1159,12 +1247,49 @@ export default {
 			// The agents SDK hands ctx.props to the Durable Object as this.props;
 			// ExecutionContext types it read-only.
 			const ip = request.headers.get("cf-connecting-ip") ?? "";
+			const ipHash = ip ? await hashIp(ip, env.MCP_IP_SALT || "darak-mcp") : "";
+			const accessToken = bearerFrom(request.headers.get("authorization"));
 			(ctx as ExecutionContext & { props: CallerProps }).props = {
-				ipHash: ip ? await hashIp(ip, env.MCP_IP_SALT || "darak-mcp") : "",
+				ipHash,
 				userAgent: (request.headers.get("user-agent") ?? "").slice(0, 120),
 				sessionId: request.headers.get("mcp-session-id") ?? "",
-				accessToken: bearerFrom(request.headers.get("authorization")),
+				accessToken,
 			};
+			// Two different limits for two different problems, and a connected
+			// caller skips both — the API enforces their plan instead.
+			if (!accessToken) {
+				// Bursts: protects the shared service key's own rate limit.
+				// Temporary, so it says so and asks the caller to wait.
+				const { success } = await env.ANON_LIMIT.limit({ key: ipHash || "anonymous" });
+				if (!success) {
+					return Response.json(
+						{
+							error: "rate_limited",
+							error_description: "Too many requests. Try again shortly.",
+						},
+						{ status: 429, headers: { "retry-after": "60" } },
+					);
+				}
+				// The month's budget: not temporary, and waiting will not help.
+				// A 401 naming the resource metadata is what makes an MCP client
+				// offer to sign in, so the prompt arrives exactly when an
+				// account is the way forward.
+				const budget = env.ANON_BUDGET.get(
+					env.ANON_BUDGET.idFromName(ipHash || "anonymous"),
+				);
+				if ((await budget.remaining()) <= 0) {
+					return Response.json(
+						{ error: "anonymous_quota_exhausted", error_description: CONNECT_HINT },
+						{
+							status: 401,
+							headers: {
+								"WWW-Authenticate": `Bearer resource_metadata="${url.origin}/.well-known/oauth-protected-resource", error="insufficient_scope", error_description="Anonymous monthly allowance spent"`,
+							},
+						},
+					);
+				}
+			}
+
 			return MyMCP.serve("/mcp").fetch(request, env, ctx);
 		}
 

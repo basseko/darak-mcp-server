@@ -13,12 +13,20 @@
 			"new_sqlite_classes": ["MyMCP"],
 			"tag": "v1",
 		},
+		{
+			"new_sqlite_classes": ["AnonBudget"],
+			"tag": "v2",
+		},
 	],
 	"durable_objects": {
 		"bindings": [
 			{
 				"class_name": "MyMCP",
 				"name": "MCP_OBJECT",
+			},
+			{
+				"class_name": "AnonBudget",
+				"name": "ANON_BUDGET",
 			},
 		],
 	},
@@ -32,6 +40,16 @@
 		// http://localhost:3000/api/v1 when developing against a local app.
 		"DARAK_API_BASE": "https://api.darak.app/v1",
 	},
+	// Anonymous callers share one API key, so without a per-caller limit a
+	// single heavy client would starve everyone asking a question in Claude.
+	// Keyed by the same salted IP hash the usage events carry.
+	"ratelimits": [
+		{
+			"name": "ANON_LIMIT",
+			"namespace_id": "1001",
+			"simple": { "limit": 60, "period": 60 },
+		},
+	],
 	"observability": {
 		"enabled": true,
 		"logs": { "head_sampling_rate": 1 },
