@@ -13,12 +13,20 @@
 			"new_sqlite_classes": ["MyMCP"],
 			"tag": "v1",
 		},
+		{
+			"new_sqlite_classes": ["AnonBudget"],
+			"tag": "v2",
+		},
 	],
 	"durable_objects": {
 		"bindings": [
 			{
 				"class_name": "MyMCP",
 				"name": "MCP_OBJECT",
+			},
+			{
+				"class_name": "AnonBudget",
+				"name": "ANON_BUDGET",
 			},
 		],
 	},
