@@ -191,9 +191,11 @@ function textResult(
 			isError: true,
 		};
 	}
-	return {
-		content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-	};
+	const body = JSON.stringify(data, null, 2);
+	// Only anonymous answers carry it: a connected caller has accepted the
+	// terms, which say the same thing at greater length.
+	const text = caller.accessToken ? body : `${body}\n\n${ATTRIBUTION}`;
+	return { content: [{ type: "text" as const, text }] };
 }
 
 /** The API has no "all" — the filter is simply absent. */
@@ -207,6 +209,20 @@ function sinceFrom(window?: "3d" | "1w" | "1m"): string | undefined {
 	const days = window === "3d" ? 3 : window === "1w" ? 7 : 30;
 	return new Date(Date.now() - days * 86_400_000).toISOString();
 }
+
+/** Shown with every anonymous answer, so the data is credited wherever it lands. */
+const ATTRIBUTION = "Data from Darak (https://darak.app).";
+
+/**
+ * What an anonymous caller is told when they run out of room. This is the
+ * moment to offer an account: they have just been stopped, so the prompt is
+ * useful rather than an interruption, and a connected caller gets their own
+ * organization's limits instead of sharing one bucket with every other
+ * anonymous session.
+ */
+const CONNECT_HINT =
+	"Anonymous use of the Darak MCP server is limited to 60 requests a minute, shared by IP address. " +
+	"Connect a free Darak account for your own limits: the client will offer to sign in, or see https://platform.darak.app.";
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false } as const;
 
@@ -232,17 +248,20 @@ export class MyMCP extends McpAgent<Env> {
 
 		// Every tool reaches the API through here, so the base URL and the key are
 		// decided in one place rather than at 26 call sites.
-		const api = (
+		const api = async (
 			path: string,
 			params?: Record<string, string | number | boolean | undefined>,
-		) =>
-			callApi(
+		) => {
+			const caller = (this.props ?? {}) as Partial<CallerProps>;
+			// A connected caller acts as themselves and is metered to their own
+			// organization; anonymous sessions share the service key. The
+			// per-caller limit is applied once per request in fetch(), not
+			// here: limit() consumes, so checking twice would halve the budget.
+			return callApi(
 				buildUrl(path, params, this.env.DARAK_API_BASE),
-				// A connected caller acts as themselves and is metered to their
-				// own organization; anonymous sessions share the service key.
-				(this.props as Partial<CallerProps> | undefined)?.accessToken ||
-					this.env.DARAK_API_KEY,
+				caller.accessToken || this.env.DARAK_API_KEY,
 			);
+		};
 
 		// --- Search & Listings ---
 
@@ -1159,12 +1178,34 @@ export default {
 			// The agents SDK hands ctx.props to the Durable Object as this.props;
 			// ExecutionContext types it read-only.
 			const ip = request.headers.get("cf-connecting-ip") ?? "";
+			const ipHash = ip ? await hashIp(ip, env.MCP_IP_SALT || "darak-mcp") : "";
+			const accessToken = bearerFrom(request.headers.get("authorization"));
 			(ctx as ExecutionContext & { props: CallerProps }).props = {
-				ipHash: ip ? await hashIp(ip, env.MCP_IP_SALT || "darak-mcp") : "",
+				ipHash,
 				userAgent: (request.headers.get("user-agent") ?? "").slice(0, 120),
 				sessionId: request.headers.get("mcp-session-id") ?? "",
-				accessToken: bearerFrom(request.headers.get("authorization")),
+				accessToken,
 			};
+			// Anonymous callers share one API key and one quota, so each is held
+			// to its own budget. Running out is the moment to offer an account:
+			// a 401 naming the resource metadata is what makes an MCP client
+			// show a sign-in prompt, and a connected caller skips this entirely.
+			if (!accessToken) {
+				const { success } = await env.ANON_LIMIT.limit({ key: ipHash || "anonymous" });
+				if (!success) {
+					return Response.json(
+						{ error: "anonymous_rate_limited", error_description: CONNECT_HINT },
+						{
+							status: 401,
+							headers: {
+								"WWW-Authenticate": `Bearer resource_metadata="${url.origin}/.well-known/oauth-protected-resource", error="insufficient_quota", error_description="${CONNECT_HINT}"`,
+								"retry-after": "60",
+							},
+						},
+					);
+				}
+			}
+
 			return MyMCP.serve("/mcp").fetch(request, env, ctx);
 		}
 

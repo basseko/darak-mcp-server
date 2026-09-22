@@ -14,6 +14,8 @@ declare namespace Cloudflare {
 		/** Secret: `wrangler secret put DARAK_API_KEY`. Not in wrangler.jsonc. */
 		DARAK_API_KEY: string;
 		MCP_OBJECT: DurableObjectNamespace<import("./src/index").MyMCP>;
+		/** Cloudflare rate limiter; see `ratelimits` in wrangler.jsonc. */
+		ANON_LIMIT: { limit(o: { key: string }): Promise<{ success: boolean }> };
 	}
 }
 interface Env extends Cloudflare.Env {}
