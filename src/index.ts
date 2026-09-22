@@ -88,28 +88,80 @@ function rewriteUrls(data: unknown): unknown {
   return rewritten;
 }
 
+/**
+ * Who is calling, as far as an anonymous server can tell: a salted hash of the
+ * IP (stable per caller, never an address), the MCP client's name, and the
+ * session. Without this every call looked the same in PostHog
+ * (distinct_id "mcp-server"), so somebody pulling data for their own product
+ * was indistinguishable from somebody asking Claude a question.
+ */
+export interface CallerProps {
+  ipHash: string;
+  userAgent: string;
+  sessionId: string;
+}
+
+export async function hashIp(ip: string, salt: string): Promise<string> {
+  const bytes = new TextEncoder().encode(`${salt}:${ip}`);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)]
+    .slice(0, 8)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/** Rows returned, so asking for a few listings is told apart from pulling pages of them. */
+export function countResults(data: unknown): number | null {
+  if (!data || typeof data !== "object") return null;
+  if (Array.isArray(data)) return data.length;
+  const obj = data as Record<string, unknown>;
+  for (const key of [
+    "listings",
+    "data",
+    "results",
+    "units",
+    "projects",
+    "neighborhoods",
+  ]) {
+    if (Array.isArray(obj[key])) return (obj[key] as unknown[]).length;
+  }
+  return null;
+}
+
 function trackToolCall(
   toolName: string,
   params: Record<string, unknown>,
   isError: boolean,
   ctx: DurableObjectState,
   env: Env,
+  caller: Partial<CallerProps>,
+  client: { name?: string; version?: string } | undefined,
+  results: number | null,
 ) {
   const token = env.POSTHOG_PROJECT_TOKEN;
   if (!token) return;
+  const host = env.POSTHOG_HOST || "https://us.i.posthog.com";
   ctx.waitUntil(
-    fetch("https://us.i.posthog.com/capture/", {
+    fetch(`${host}/capture/`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         api_key: token,
         event: "mcp_tool_called",
-        distinct_id: "mcp-server",
+        // One person per caller, so usage per builder is visible.
+        distinct_id: caller.ipHash || "mcp-anonymous",
         properties: {
           tool: toolName,
           city: params.city ?? null,
           listing_type: params.listing_type ?? null,
           is_error: isError,
+          results,
+          limit: params.limit ?? null,
+          page: params.page ?? null,
+          client_name: client?.name ?? null,
+          client_version: client?.version ?? null,
+          session_id: caller.sessionId || null,
+          user_agent: caller.userAgent || null,
         },
       }),
     }).catch(() => {}),
@@ -122,6 +174,8 @@ function textResult(
   params: Record<string, unknown>,
   ctx: DurableObjectState,
   env: Env,
+  caller: Partial<CallerProps>,
+  client: { name?: string; version?: string } | undefined,
 ) {
   const rewritten = rewriteUrls(data);
   const isError = !!(
@@ -129,7 +183,16 @@ function textResult(
     typeof rewritten === "object" &&
     "error" in rewritten
   );
-  trackToolCall(toolName, params, isError, ctx, env);
+  trackToolCall(
+    toolName,
+    params,
+    isError,
+    ctx,
+    env,
+    caller,
+    client,
+    countResults(rewritten),
+  );
   if (isError) {
     return {
       content: [
@@ -160,7 +223,16 @@ export class MyMCP extends McpAgent<Env> {
       toolName: string,
       data: unknown,
       params: Record<string, unknown> = {},
-    ) => textResult(toolName, data, params, this.ctx, this.env);
+    ) =>
+      textResult(
+        toolName,
+        data,
+        params,
+        this.ctx,
+        this.env,
+        (this.props ?? {}) as Partial<CallerProps>,
+        this.server.server.getClientVersion(),
+      );
 
     // --- Search & Listings ---
 
@@ -1294,6 +1366,14 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === "/mcp" || url.pathname.startsWith("/mcp/")) {
+      // The agents SDK hands ctx.props to the Durable Object as this.props;
+      // ExecutionContext types it read-only.
+      const ip = request.headers.get("cf-connecting-ip") ?? "";
+      (ctx as ExecutionContext & { props: CallerProps }).props = {
+        ipHash: ip ? await hashIp(ip, env.MCP_IP_SALT || "darak-mcp") : "",
+        userAgent: (request.headers.get("user-agent") ?? "").slice(0, 120),
+        sessionId: request.headers.get("mcp-session-id") ?? "",
+      };
       return MyMCP.serve("/mcp").fetch(request, env, ctx);
     }
 

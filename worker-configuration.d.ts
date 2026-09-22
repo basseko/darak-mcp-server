@@ -8,6 +8,8 @@ declare namespace Cloudflare {
   }
   interface Env {
     POSTHOG_PROJECT_TOKEN: "";
+    MCP_IP_SALT: string;
+    POSTHOG_HOST: string;
     MCP_OBJECT: DurableObjectNamespace<import("./src/index").MyMCP>;
   }
 }
@@ -19,7 +21,7 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 };
 declare namespace NodeJS {
   interface ProcessEnv extends StringifyValues<
-    Pick<Cloudflare.Env, "POSTHOG_PROJECT_TOKEN">
+    Pick<Cloudflare.Env, "POSTHOG_PROJECT_TOKEN" | "MCP_IP_SALT" | "POSTHOG_HOST">
   > {}
 }
 

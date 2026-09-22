@@ -24,6 +24,10 @@
   },
   "vars": {
     "POSTHOG_PROJECT_TOKEN": "phc_6DKKUjceEzIMd8MkFjmlGyDBZAeB4h5UgM1OweSCvDB",
+    // Salt for hashing caller IPs in usage events; rotating it resets the ids.
+    "MCP_IP_SALT": "darak-mcp-2026-09",
+    // Overridable so `wrangler dev` can post usage events to a local sink.
+    "POSTHOG_HOST": "https://us.i.posthog.com",
   },
   "observability": {
     "enabled": true,
