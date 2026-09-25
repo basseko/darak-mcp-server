@@ -1,6 +1,6 @@
 // Keep these values aligned with darak's src/lib/mcp-oauth.ts. OAuth tokens
 // issued for the Worker must name this exact resource and issuer.
-export const MCP_RESOURCE = "https://darak.app/mcp";
+export const MCP_RESOURCE = "https://platform.darak.app/mcp";
 export const MCP_READ_SCOPE = "darak.read";
 // Production BETTER_AUTH_URL is darak.app; discovery on both hosts reports
 // this exact issuer. Do not substitute the platform host without redeploying
@@ -16,7 +16,7 @@ export function protectedResourceMetadata() {
 		authorization_servers: [AUTHORIZATION_SERVER],
 		bearer_methods_supported: ["header"],
 		scopes_supported: [MCP_READ_SCOPE],
-		resource_documentation: "https://platform.darak.app/docs",
+		resource_documentation: "https://platform.darak.app/docs/guides",
 	};
 }
 
