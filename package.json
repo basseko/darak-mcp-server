@@ -2,6 +2,7 @@
 	"name": "darak-mcp-server",
 	"version": "0.0.0",
 	"private": true,
+	"type": "module",
 	"scripts": {
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
@@ -9,7 +10,8 @@
 		"lint:fix": "oxlint --fix",
 		"start": "wrangler dev",
 		"cf-typegen": "wrangler types",
-		"type-check": "tsc --noEmit"
+		"type-check": "tsc --noEmit",
+		"test": "node --experimental-strip-types --test test/*.test.mjs"
 	},
 	"dependencies": {
 		"agents": "^0.5.0",

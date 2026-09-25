@@ -66,20 +66,49 @@ claude mcp add --transport http darak https://darak.app/mcp
 
 Connect directly to `https://darak.app/mcp` using the Streamable HTTP transport.
 
+## Connected accounts and OAuth
+
+Anonymous access uses a shared service key and a per-caller budget. When that
+budget is exhausted, the server returns a Bearer challenge pointing to
+`https://darak.app/.well-known/oauth-protected-resource`. Its metadata names
+`https://darak.app/mcp` as the resource, `darak.read` as the scope, and
+`https://darak.app/api/auth` as the authorization-server issuer. Production
+`BETTER_AUTH_URL` uses `darak.app`; even metadata fetched from
+`platform.darak.app` advertises the `darak.app/api/auth` issuer. Clients discover
+the authorize/token/registration endpoints from that issuer;
+the Worker is a resource server and does not mint credentials.
+
+A connected caller's Bearer token is forwarded unchanged to the versioned Darak
+API, which validates the issuer, audience, expiry, and scope and meters the
+caller's organization. DPoP and malformed authorization headers are rejected,
+not silently treated as anonymous; DPoP-bound tokens sent as Bearer are rejected
+by the API. The Worker cannot support DPoP-bound access tokens without verifying
+proofs itself or coordinating a proof-preserving API call.
+
+**Release order:** This change depends on [Darak PR #389](https://github.com/basseko/darak/pull/389)
+and its guarded Better Auth 1.7 migration. Do not deploy the new Worker issuer
+before the app's authorization-server metadata and token endpoint are live.
+Coordinate with the app migration/deployment window, then test discovery, S256
+PKCE, consent, token exchange/refresh, audience/scope rejection, and a connected
+MCP call. Existing clients may cache the old metadata for up to an hour; wait
+for it to expire or purge that cache during cutover.
+
 ## Development
 
 ```bash
 npm install
-npm run dev       # Local dev server at http://localhost:8787
-npm run deploy    # Deploy to Cloudflare Workers
+npm run dev         # Local dev server at http://localhost:8787
+npm run type-check
+npm test            # Node 24
+npm run deploy      # Deploy only after the coordinated rollout
 ```
 
 ## Architecture
 
 - Runs on Cloudflare Workers with Durable Objects
-- Calls the public Darak API at `https://darak.app/api/*`
+- Calls the public, versioned, metered Darak API at `https://api.darak.app/v1`
 - All tools are read-only (annotated with `readOnlyHint: true`)
-- No authentication required (public data)
+- Anonymous use is available; connected accounts can use OAuth Bearer tokens
 
 ## Privacy Policy
 
@@ -87,7 +116,7 @@ See [https://darak.app/privacy](https://darak.app/privacy) for the full privacy 
 
 **Data handling summary:**
 
-- **No user data collected.** The server does not require authentication and does not store any user information.
+- **Authentication is optional.** A connected caller's access token is forwarded to the Darak API for authorization and metering; this Worker code does not mint or persist it. Anonymous usage budgets are keyed by a salted hash of the caller IP.
 - **No conversation data stored.** Queries are proxied to the Darak API and responses are returned directly. The server does not log, store, or inspect query contents.
 - **Anonymous usage analytics.** Tool call events (tool name, city, listing type, success/failure) are sent to PostHog for aggregate usage monitoring. No personally identifiable information is included.
 - **No third-party data sharing.** Data is not sold, shared, or transferred to third parties beyond the PostHog analytics described above.
