@@ -1297,7 +1297,7 @@ export default {
 		}
 
 		if (url.pathname === "/") {
-			return Response.redirect("https://darak.app/connect", 302);
+			return Response.redirect("https://platform.darak.app/docs/guides", 302);
 		}
 
 		return new Response("Not found", { status: 404 });

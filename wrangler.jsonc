@@ -8,6 +8,10 @@
 	"main": "src/index.ts",
 	"compatibility_date": "2026-03-26",
 	"compatibility_flags": ["nodejs_compat"],
+	// platform.darak.app already passes through Cloudflare on its way to Vercel.
+	// Only /mcp* belongs to this Worker; remove the old darak.app/mcp* trigger
+	// during the hard cutover rather than redirecting OAuth clients.
+	"routes": [{ "pattern": "platform.darak.app/mcp*", "zone_name": "darak.app" }],
 	"migrations": [
 		{
 			"new_sqlite_classes": ["MyMCP"],

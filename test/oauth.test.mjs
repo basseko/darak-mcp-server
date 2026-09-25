@@ -10,22 +10,22 @@ import {
 } from "../src/oauth.ts";
 
 test("protected-resource metadata matches the Darak OAuth 1.7 resource and issuer", () => {
-	assert.equal(MCP_RESOURCE, "https://darak.app/mcp");
+	assert.equal(MCP_RESOURCE, "https://platform.darak.app/mcp");
 	assert.equal(AUTHORIZATION_SERVER, "https://darak.app/api/auth");
 	assert.equal(MCP_READ_SCOPE, "darak.read");
 	assert.deepEqual(protectedResourceMetadata(), {
-		resource: "https://darak.app/mcp",
+		resource: "https://platform.darak.app/mcp",
 		authorization_servers: ["https://darak.app/api/auth"],
 		bearer_methods_supported: ["header"],
 		scopes_supported: ["darak.read"],
-		resource_documentation: "https://platform.darak.app/docs",
+		resource_documentation: "https://platform.darak.app/docs/guides",
 	});
 });
 
 test("resource challenges point back to the responding origin's metadata", () => {
 	assert.equal(
-		resourceMetadataUrl("https://darak.app"),
-		"https://darak.app/.well-known/oauth-protected-resource",
+		resourceMetadataUrl("https://platform.darak.app"),
+		"https://platform.darak.app/.well-known/oauth-protected-resource",
 	);
 	assert.equal(
 		resourceMetadataUrl("http://localhost:8787"),
