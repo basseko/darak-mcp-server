@@ -2,6 +2,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
 import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
+import {
+	bearerFrom,
+	protectedResourceMetadata,
+	RESOURCE_METADATA_PATH,
+	resourceMetadataUrl,
+} from "./oauth";
 
 // --- Helpers ---
 
@@ -9,22 +15,6 @@ import { z } from "zod";
 // call carries a key, so MCP traffic lands in the same request log, usage
 // rollup and dashboards as any other API consumer.
 const DEFAULT_API_BASE = "https://api.darak.app/v1";
-
-/**
- * Where a client goes to sign in; this server only consumes the result.
- *
- * It must be the issuer exactly as the discovery document states it
- * (RFC 8414 §3.3), not the path the endpoints happen to live under: a client
- * fetches `<issuer>/.well-known/oauth-authorization-server` and rejects the
- * result if the `issuer` inside does not match what it asked for.
- */
-const AUTHORIZATION_SERVER = "https://darak.app";
-
-/** The token from `Authorization: Bearer <token>`, or "" when absent. */
-function bearerFrom(header: string | null): string {
-	const m = /^Bearer\s+(.+)$/i.exec(header?.trim() ?? "");
-	return m ? m[1].trim() : "";
-}
 
 const CITY_ENUM = ["riyadh", "jeddah", "eastern_province", "makkah", "madinah"] as const;
 
@@ -116,9 +106,10 @@ export interface CallerProps {
 	sessionId: string;
 	/**
 	 * The caller's OAuth access token, when they have connected an account.
-	 * Forwarded to the API unchanged: this server is a resource server, not an
-	 * authorization server, so it never mints or inspects credentials. Empty
-	 * for an anonymous session, which falls back to the shared service key.
+	 * Forwarded to the API unchanged: this resource server never mints or
+	 * verifies credentials; the API verifies issuer, audience and scope. DPoP
+	 * credentials cannot be forwarded as Bearer. Empty for an anonymous session,
+	 * which falls back to the shared service key.
 	 */
 	accessToken: string;
 }
@@ -1231,16 +1222,10 @@ export default {
 		// RFC 9728. An MCP client reads this to discover where to sign in, and
 		// only looks for it after a 401 naming it, so advertising it costs an
 		// anonymous caller nothing.
-		if (url.pathname === "/.well-known/oauth-protected-resource") {
-			return Response.json(
-				{
-					resource: `${url.origin}/mcp`,
-					authorization_servers: [AUTHORIZATION_SERVER],
-					bearer_methods_supported: ["header"],
-					resource_documentation: "https://platform.darak.app/docs",
-				},
-				{ headers: { "cache-control": "public, max-age=3600" } },
-			);
+		if (url.pathname === RESOURCE_METADATA_PATH) {
+			return Response.json(protectedResourceMetadata(), {
+				headers: { "cache-control": "public, max-age=15, stale-while-revalidate=15" },
+			});
 		}
 
 		if (url.pathname === "/mcp" || url.pathname.startsWith("/mcp/")) {
@@ -1248,7 +1233,25 @@ export default {
 			// ExecutionContext types it read-only.
 			const ip = request.headers.get("cf-connecting-ip") ?? "";
 			const ipHash = ip ? await hashIp(ip, env.MCP_IP_SALT || "darak-mcp") : "";
-			const accessToken = bearerFrom(request.headers.get("authorization"));
+			const authorization = request.headers.get("authorization");
+			const accessToken = bearerFrom(authorization);
+			// Do not silently downgrade DPoP or malformed credentials to the shared
+			// anonymous key. The v1 bridge accepts only resource-bound Bearer JWTs.
+			if (authorization && !accessToken) {
+				return Response.json(
+					{
+						error: "invalid_token",
+						error_description:
+							"Only Bearer access tokens are supported by this resource.",
+					},
+					{
+						status: 401,
+						headers: {
+							"WWW-Authenticate": `Bearer resource_metadata="${resourceMetadataUrl(url.origin)}", error="invalid_token"`,
+						},
+					},
+				);
+			}
 			(ctx as ExecutionContext & { props: CallerProps }).props = {
 				ipHash,
 				userAgent: (request.headers.get("user-agent") ?? "").slice(0, 120),
@@ -1283,7 +1286,7 @@ export default {
 						{
 							status: 401,
 							headers: {
-								"WWW-Authenticate": `Bearer resource_metadata="${url.origin}/.well-known/oauth-protected-resource", error="insufficient_scope", error_description="Anonymous monthly allowance spent"`,
+								"WWW-Authenticate": `Bearer resource_metadata="${resourceMetadataUrl(url.origin)}", error="insufficient_scope", error_description="Anonymous monthly allowance spent"`,
 							},
 						},
 					);
