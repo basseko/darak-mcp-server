@@ -72,8 +72,10 @@ Anonymous access uses a shared service key and a per-caller budget. When that
 budget is exhausted, the server returns a Bearer challenge pointing to
 `https://darak.app/.well-known/oauth-protected-resource`. Its metadata names
 `https://darak.app/mcp` as the resource, `darak.read` as the scope, and
-`https://platform.darak.app/api/auth` as the authorization-server issuer.
-Clients discover the authorize/token/registration endpoints from that issuer;
+`https://darak.app/api/auth` as the authorization-server issuer. Production
+`BETTER_AUTH_URL` uses `darak.app`; even metadata fetched from
+`platform.darak.app` advertises the `darak.app/api/auth` issuer. Clients discover
+the authorize/token/registration endpoints from that issuer;
 the Worker is a resource server and does not mint credentials.
 
 A connected caller's Bearer token is forwarded unchanged to the versioned Darak
@@ -85,7 +87,7 @@ proofs itself or coordinating a proof-preserving API call.
 
 **Release order:** This change depends on [Darak PR #389](https://github.com/basseko/darak/pull/389)
 and its guarded Better Auth 1.7 migration. Do not deploy the new Worker issuer
-before the platform's authorization-server metadata and token endpoint are live.
+before the app's authorization-server metadata and token endpoint are live.
 Coordinate with the app migration/deployment window, then test discovery, S256
 PKCE, consent, token exchange/refresh, audience/scope rejection, and a connected
 MCP call. Existing clients may cache the old metadata for up to an hour; wait

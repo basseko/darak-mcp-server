@@ -2,7 +2,10 @@
 // issued for the Worker must name this exact resource and issuer.
 export const MCP_RESOURCE = "https://darak.app/mcp";
 export const MCP_READ_SCOPE = "darak.read";
-export const AUTHORIZATION_SERVER = "https://platform.darak.app/api/auth";
+// Production BETTER_AUTH_URL is darak.app; discovery on both hosts reports
+// this exact issuer. Do not substitute the platform host without redeploying
+// and verifying the app's authorization server first.
+export const AUTHORIZATION_SERVER = "https://darak.app/api/auth";
 
 export const RESOURCE_METADATA_PATH = "/.well-known/oauth-protected-resource";
 
