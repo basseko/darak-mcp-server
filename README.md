@@ -1,141 +1,84 @@
-# Darak MCP Server
+# Kite MCP Server
 
-Remote MCP server for Saudi real estate data. Gives AI assistants access to 65,000+ rental and sale property listings across 5 Saudi cities, with market analytics, neighborhood comparisons, and price trends.
+Remote MCP server for Saudi real estate data from [Kite](https://kite.sa) (formerly Darak). It lets an AI assistant search live rental and sale listings, check whether a price is fair, compare neighborhoods and look up development projects.
 
-**Server URL:** `https://platform.darak.app/mcp`
+**Server URL:** `https://mcp.kite.sa/mcp` (Streamable HTTP, OAuth sign-in)
 
-## Tools (23, all read-only)
+Full documentation: [platform.kite.sa/docs/mcp](https://platform.kite.sa/docs/mcp)
 
-### Search & Listings
-
-| Tool                      | Description                                     |
-| ------------------------- | ----------------------------------------------- |
-| `search_listings`         | Search rental and sale listings with filters    |
-| `get_listings_by_ids`     | Fetch several listings by ID                    |
-| `get_listings_count`      | Count listings matching search filters          |
-| `get_listing`             | Full details for one listing                    |
-| `get_comparable_listings` | Similar nearby listings for price comparison    |
-| `get_price_history`       | Price changes over time for a listing           |
-| `get_best_value_listings` | Listings priced below their neighborhood median |
-
-### Market Analytics
-
-| Tool                        | Description                                     |
-| --------------------------- | ----------------------------------------------- |
-| `get_price_distribution`    | Price histogram and percentiles                 |
-| `get_area_distribution`     | Area (sqm) distribution                         |
-| `get_listing_market_stats`  | Listing price and area context                  |
-| `compare_neighborhoods`     | Side-by-side neighborhood comparison            |
-| `get_rental_yield`          | Gross yield from rental and sale medians        |
-| `get_supply_stats`          | Listing supply over time                        |
-| `get_vacancy_indicator`     | Stale listing counts                            |
-| `get_neighborhood_rent_map` | Neighborhood rent values for map visualizations |
-| `get_market_summary`        | City-level market overview                      |
-| `get_neighborhood_trends`   | Monthly neighborhood price trends               |
-
-### Geography
-
-| Tool                   | Description                            |
-| ---------------------- | -------------------------------------- |
-| `list_neighborhoods`   | Neighborhood IDs and names by city     |
-| `list_city_directions` | City districts and their neighborhoods |
-
-### Off-plan Projects
-
-| Tool                   | Description                               |
-| ---------------------- | ----------------------------------------- |
-| `search_projects`      | Find developments by location and filters |
-| `get_project`          | Project details                           |
-| `list_developers`      | Developers with off-plan projects         |
-| `search_project_units` | Find available units in projects          |
-
-## Cities
-
-Riyadh, Jeddah, Eastern Province, Makkah, Madinah.
+> This repository holds the earlier source of the server. The hosted server at `mcp.kite.sa` is now maintained in Kite's main codebase; this repository is kept for reference and for directory listings. The old `platform.darak.app/mcp` and `darak.app/mcp` addresses are retired: remove the server from your client and add it again with the new URL.
 
 ## Connect
 
-### Claude Desktop / Claude Code
+### Claude (claude.ai, Desktop, mobile)
+
+Open **Customize → Connectors**, find Kite in the directory and select **Connect**.
+
+### Claude Code
+
+```bash
+claude mcp add --transport http kite https://mcp.kite.sa/mcp
+```
+
+Then run `/mcp` inside Claude Code and choose Kite to sign in.
+
+### Any MCP client
+
+Add a remote server with the URL `https://mcp.kite.sa/mcp`. Any client that supports remote MCP servers over Streamable HTTP with OAuth sign-in can connect. If an app only runs local servers, bridge with `mcp-remote` (requires Node.js):
 
 ```json
 {
-	"mcpServers": {
-		"darak": {
-			"command": "npx",
-			"args": ["mcp-remote", "https://platform.darak.app/mcp"]
-		}
-	}
+  "mcpServers": {
+    "kite": {
+      "command": "npx",
+      "args": ["mcp-remote", "https://mcp.kite.sa/mcp"]
+    }
+  }
 }
 ```
 
-### Claude Code (CLI)
+## Signing in
 
-```bash
-claude mcp add --transport http darak https://platform.darak.app/mcp
-```
+The first time the assistant uses Kite, it opens Kite sign-in in your browser. Enter your email, enter the 6-digit code Kite sends, pick a workspace (a free Sandbox workspace is created if you're new) and approve read-only access. Calls count against that workspace's plan. Never paste an API key into an MCP configuration; sign-in is the only way the server accepts a connection.
 
-### Any MCP client (Streamable HTTP)
+## Tools (18, all read-only)
 
-Connect directly to `https://platform.darak.app/mcp` using the Streamable HTTP transport.
+| Tool                        | What it answers                                                                              |
+| --------------------------- | -------------------------------------------------------------------------------------------- |
+| `search_listings`           | Active rental or sale listings matching neighborhood, price, rooms, area, amenities and more |
+| `get_listings_count`        | How many listings match, without returning them                                              |
+| `get_listings`              | Full records for up to 100 listings by id                                                    |
+| `get_comparable_listings`   | Similar listings nearby, with a price summary                                                |
+| `get_price_history`         | A listing's recorded price changes                                                           |
+| `check_listing_price`       | Whether one listing's price is high or low against its city and neighborhood                 |
+| `get_best_value_listings`   | Listings priced furthest below comparable ones                                               |
+| `get_market_stats`          | Median prices, distributions and supply for one market segment                               |
+| `get_neighborhood_rent_map` | Median price for every neighborhood in a city                                                |
+| `compare_neighborhoods`     | Two to five neighborhoods side by side                                                       |
+| `get_neighborhood_trends`   | Monthly asking-price trend over the last 2 to 12 months                                      |
+| `get_rental_yield`          | Estimated gross rental yield by city and neighborhood                                        |
+| `get_reference_data`        | Neighborhood names and ids, city areas such as "north Riyadh", and other lookups             |
+| `search_projects`           | Off-plan and ready development projects                                                      |
+| `get_project`               | One project's full record                                                                    |
+| `get_project_units`         | The units inside one project                                                                 |
+| `search_project_units`      | Units across projects, by project and unit filters                                           |
+| `list_developers`           | Developers with active projects                                                              |
 
-## Connected accounts and OAuth
+## What the data is
 
-Anonymous access uses a shared service key and a per-caller budget. When that
-budget is exhausted, the server returns a Bearer challenge pointing to
-`https://platform.darak.app/.well-known/oauth-protected-resource`. Its metadata
-names `https://platform.darak.app/mcp` as the resource, `darak.read` as the scope, and
-`https://darak.app/api/auth` as the authorization-server issuer. Production
-`BETTER_AUTH_URL` uses `darak.app`; even metadata fetched from
-`platform.darak.app` advertises the `darak.app/api/auth` issuer. Clients discover
-the authorize/token/registration endpoints from that issuer;
-the Worker is a resource server and does not mint credentials.
+- Every price is the asking price of an active listing, not a completed sale, a signed lease or a registered deal.
+- Prices are in SAR, and rent is always per year, even when the ad was posted monthly.
+- Medians and trends describe asking prices and shift when the mix of listings changes. They are not forecasts or appraisals.
 
-A connected caller's Bearer token is forwarded unchanged to the versioned Darak
-API, which validates the issuer, audience, expiry, and scope and meters the
-caller's organization. DPoP and malformed authorization headers are rejected,
-not silently treated as anonymous; DPoP-bound tokens sent as Bearer are rejected
-by the API. The Worker cannot support DPoP-bound access tokens without verifying
-proofs itself or coordinating a proof-preserving API call.
+## For client developers
 
-**Hard cutover:** The old `https://darak.app/mcp` route will be retired, not
-redirected. Update every MCP client configuration to `https://platform.darak.app/mcp`
-and reconnect: old-resource tokens and consent do not transfer. Keep the OAuth
-issuer at `https://darak.app/api/auth`. Deploy the app's guarded resource migration
-and new audience verification before switching this Cloudflare Worker route.
-After deployment, test discovery, S256 PKCE, consent, token refresh, and a
-connected MCP call. Clients may cache old metadata for up to an hour.
+On the first request the server answers `401` with a Bearer challenge. The [protected-resource metadata](https://mcp.kite.sa/.well-known/oauth-protected-resource) names `https://mcp.kite.sa/mcp` as the resource, `darak.read` as the scope and `https://darak.app/api/auth` as the authorization-server issuer. The issuer and scope names are legacy and stable. Clients must use OAuth 2.1 with S256 PKCE.
 
-## Development
+## Also from Kite
 
-```bash
-npm install
-npm run dev         # Local dev server at http://localhost:8787
-npm run type-check
-npm test            # Node 24
-npm run deploy      # Deploy only after the coordinated rollout
-```
+- REST API: `https://api.kite.sa/v1` ([OpenAPI](https://api.kite.sa/v1/openapi.json), [docs](https://platform.kite.sa/docs))
+- SDKs: [`@kite-sa/sdk`](https://www.npmjs.com/package/@kite-sa/sdk) (npm) and [`kite-sa`](https://pypi.org/project/kite-sa/) (PyPI)
 
-## Architecture
+## Privacy
 
-- Runs on Cloudflare Workers with Durable Objects
-- Calls the public, versioned, metered Darak API at `https://api.darak.app/v1`
-- All tools are read-only (annotated with `readOnlyHint: true`)
-- Anonymous use is available; connected accounts can use OAuth Bearer tokens
-
-## Privacy Policy
-
-See [https://darak.app/privacy](https://darak.app/privacy) for the full privacy policy.
-
-**Data handling summary:**
-
-- **Authentication is optional.** A connected caller's access token is forwarded to the Darak API for authorization and metering; this Worker code does not mint or persist it. Anonymous usage budgets are keyed by a salted hash of the caller IP.
-- **No conversation data stored.** Queries are proxied to the Darak API and responses are returned directly. The server does not log, store, or inspect query contents.
-- **Anonymous usage analytics.** Tool call events (tool name, city, listing type, success/failure) are sent to PostHog for aggregate usage monitoring. No personally identifiable information is included.
-- **No third-party data sharing.** Data is not sold, shared, or transferred to third parties beyond the PostHog analytics described above.
-- **Data source.** All property data is aggregated from publicly available Saudi real estate platforms.
-
-## Support
-
-- Website: [darak.app](https://darak.app)
-- Issues: [github.com/basseko/darak-mcp-server/issues](https://github.com/basseko/darak-mcp-server/issues)
-- Twitter/X: [@getdarak](https://x.com/getdarak)
+See [kite.sa/en/privacy](https://kite.sa/en/privacy). The server proxies tool calls to the Kite API; calls are logged in the workspace's request log under that workspace's retention setting.
